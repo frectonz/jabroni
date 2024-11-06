@@ -6,6 +6,7 @@ use std::{
 use calculator::Calculator;
 use clap::Parser;
 use color_eyre::eyre::Context;
+use db::InMemory;
 use futures::{
     future::{self, poll_fn},
     StreamExt, TryStreamExt,
@@ -55,16 +56,19 @@ async fn start(address: &str) -> color_eyre::Result<()> {
         .context("failed to create tcp listener")?;
     tracing::info!("listening on: {}", address);
 
+    let db = InMemory::new();
+
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
+                let db = db.clone();
                 tokio::spawn(async move {
                     tracing::info!("accepting connection to {peer_addr}");
 
                     let svc = ServiceBuilder::new()
                         .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
                         .layer(WebSocketAdapterLayer)
-                        .service(Calculator);
+                        .service(Calculator::new(db));
 
                     let svc = Arc::new(Mutex::new(svc));
 
@@ -90,6 +94,8 @@ async fn start(address: &str) -> color_eyre::Result<()> {
 enum ApiRequest {
     Add(TwoNumsRequest),
     Sub(TwoNumsRequest),
+    SetVar(SetVarRequest),
+    GetVar(GetVarRequest),
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,16 +104,35 @@ struct TwoNumsRequest {
     y: u8,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetVarRequest {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetVarRequest {
+    name: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ApiResponse {
-    AddResult(OpResult),
-    SubResult(OpResult),
+    Add(OpResult),
+    Sub(OpResult),
+    SetVar(VarResult),
+    GetVar(VarResult),
 }
 
 #[derive(Debug, Serialize)]
 struct OpResult {
     result: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct VarResult {
+    name: String,
+    value: String,
 }
 
 async fn accept_connection(
@@ -150,34 +175,102 @@ async fn accept_connection(
     Ok(())
 }
 
+mod db {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+
+    pub trait Database: Clone + Send {
+        fn set_var(
+            &self,
+            name: String,
+            value: String,
+        ) -> impl std::future::Future<Output = ()> + Send;
+
+        fn get_var(&self, name: String) -> impl std::future::Future<Output = String> + Send;
+    }
+
+    #[derive(Clone)]
+    pub struct InMemory {
+        map: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    impl InMemory {
+        pub fn new() -> Self {
+            Self {
+                map: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+    }
+
+    impl Database for InMemory {
+        async fn set_var(&self, name: String, value: String) {
+            let mut map = self.map.lock().unwrap();
+            map.insert(name, value);
+        }
+
+        async fn get_var(&self, name: String) -> String {
+            let map = self.map.lock().unwrap();
+            map.get(&name).unwrap().to_owned()
+        }
+    }
+}
+
 mod calculator {
     use std::task::{Context, Poll};
 
     use futures::future;
     use tower::Service;
 
-    use crate::{ApiRequest, ApiResponse, OpResult, TwoNumsRequest};
+    use crate::{
+        db::Database, ApiRequest, ApiResponse, GetVarRequest, OpResult, SetVarRequest,
+        TwoNumsRequest, VarResult,
+    };
 
     #[derive(Clone)]
-    pub struct Calculator;
+    pub struct Calculator<DB: Database> {
+        db: DB,
+    }
 
-    impl Service<ApiRequest> for Calculator {
+    impl<DB: Database> Calculator<DB> {
+        pub fn new(db: DB) -> Self {
+            Self { db }
+        }
+    }
+
+    impl<DB> Service<ApiRequest> for Calculator<DB>
+    where
+        DB: Database + 'static,
+    {
         type Response = ApiResponse;
         type Error = tower::BoxError;
-        type Future = future::Ready<Result<Self::Response, Self::Error>>;
+        type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, request: ApiRequest) -> Self::Future {
-            future::ok(match request {
-                ApiRequest::Add(TwoNumsRequest { x, y }) => ApiResponse::AddResult(OpResult {
-                    result: x.wrapping_add(y),
-                }),
-                ApiRequest::Sub(TwoNumsRequest { x, y }) => ApiResponse::SubResult(OpResult {
-                    result: x.wrapping_sub(y),
-                }),
+            let db = self.db.clone();
+
+            Box::pin(async move {
+                Ok(match request {
+                    ApiRequest::Add(TwoNumsRequest { x, y }) => ApiResponse::Add(OpResult {
+                        result: x.wrapping_add(y),
+                    }),
+                    ApiRequest::Sub(TwoNumsRequest { x, y }) => ApiResponse::Sub(OpResult {
+                        result: x.wrapping_sub(y),
+                    }),
+                    ApiRequest::SetVar(SetVarRequest { name, value }) => {
+                        db.set_var(name.clone(), value.clone()).await;
+                        ApiResponse::SetVar(VarResult { name, value })
+                    }
+                    ApiRequest::GetVar(GetVarRequest { name }) => {
+                        let value = db.get_var(name.clone()).await;
+                        ApiResponse::GetVar(VarResult { name, value })
+                    }
+                })
             })
         }
     }

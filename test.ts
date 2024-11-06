@@ -3,9 +3,13 @@ const socket = new WebSocket("ws://127.0.0.1:3030");
 socket.addEventListener("open", () => {
   console.log("connection established");
 
-  const data = { type: "Add", x: 255, y: 1 };
-  console.log("sending data", data);
-  socket.send(JSON.stringify(data));
+  const setVar = { type: "SetVar", name: "hello", value: "world" };
+  console.log("sending data", setVar);
+  socket.send(JSON.stringify(setVar));
+
+  const getVar = { type: "GetVar", name: "hello" };
+  console.log("sending data", setVar);
+  socket.send(JSON.stringify(getVar));
 });
 
 socket.addEventListener("close", () => {
