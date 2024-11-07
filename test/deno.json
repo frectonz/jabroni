@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@cliffy/prompt": "jsr:@cliffy/prompt@1.0.0-rc.7",
+    "zod": "npm:zod@^3.23.8"
+  }
+}
