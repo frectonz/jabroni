@@ -11,11 +11,12 @@ use futures::{
     future::{self, poll_fn},
     StreamExt, TryStreamExt,
 };
-use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::Message;
 use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
+
+type WsError = tokio_tungstenite::tungstenite::Error;
+type WsMessage = tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -89,77 +90,10 @@ async fn start(address: &str) -> color_eyre::Result<()> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum ApiRequest {
-    Add(TwoNumsRequest),
-    Sub(TwoNumsRequest),
-    SetVar(SetVarRequest),
-    GetVar(GetVarRequest),
-}
-
-#[derive(Debug, Deserialize)]
-struct TwoNumsRequest {
-    x: u8,
-    y: u8,
-}
-
-#[derive(Debug, Deserialize)]
-struct SetVarRequest {
-    name: String,
-    value: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct GetVarRequest {
-    name: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum ApiResponse {
-    Add(OpResult),
-    Sub(OpResult),
-    SetVar(VarResult),
-    GetVar(VarResult),
-}
-
-#[derive(Debug, Serialize)]
-struct OpResult {
-    result: u8,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum ErrorResponse {
-    BadRequest(ErrorMessage),
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorMessage {
-    message: String,
-}
-
-impl ErrorResponse {
-    pub fn bad_request(message: String) -> Self {
-        Self::BadRequest(ErrorMessage { message })
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct VarResult {
-    name: String,
-    value: String,
-}
-
 async fn accept_connection(
     stream: TcpStream,
-    svc: Arc<
-        Mutex<
-            impl Service<Message, Response = Message, Error = tokio_tungstenite::tungstenite::Error>,
-        >,
-    >,
-) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+    svc: Arc<Mutex<impl Service<WsMessage, Response = WsMessage, Error = WsError>>>,
+) -> Result<(), WsError> {
     tracing::info!("accepted connection");
 
     let ws_stream = tokio_tungstenite::accept_async(stream).await?;
@@ -183,6 +117,78 @@ async fn accept_connection(
         .await?;
 
     Ok(())
+}
+
+mod requests {
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum ApiRequest {
+        Add(TwoNumsRequest),
+        Sub(TwoNumsRequest),
+        SetVar(SetVarRequest),
+        GetVar(GetVarRequest),
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct TwoNumsRequest {
+        pub x: u8,
+        pub y: u8,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct SetVarRequest {
+        pub name: String,
+        pub value: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct GetVarRequest {
+        pub name: String,
+    }
+}
+
+mod responses {
+    use serde::Serialize;
+
+    #[derive(Debug, Serialize)]
+    #[serde(tag = "type")]
+    pub enum ApiResponse {
+        Add(OpResult),
+        Sub(OpResult),
+        SetVar(VarResult),
+        GetVar(VarResult),
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct OpResult {
+        pub result: u8,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct VarResult {
+        pub name: String,
+        pub value: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(tag = "type")]
+    pub enum ErrorResponse {
+        BadRequest(ErrorMessage),
+        NonTextMessage,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct ErrorMessage {
+        message: String,
+    }
+
+    impl ErrorResponse {
+        pub fn bad_request(message: String) -> Self {
+            Self::BadRequest(ErrorMessage { message })
+        }
+    }
 }
 
 mod db {
@@ -274,7 +280,8 @@ mod calculator {
 
     use crate::{
         db::{Database, InMemoryError},
-        ApiRequest, ApiResponse, GetVarRequest, OpResult, SetVarRequest, TwoNumsRequest, VarResult,
+        requests::{ApiRequest, GetVarRequest, SetVarRequest, TwoNumsRequest},
+        responses::{ApiResponse, OpResult, VarResult},
     };
 
     #[derive(Debug, Error, Serialize)]
@@ -341,10 +348,9 @@ mod websocket {
 
     use futures::{future, FutureExt};
     use serde::Serialize;
-    use tokio_tungstenite::tungstenite::Message;
     use tower::{Layer, Service};
 
-    use crate::{ApiRequest, ErrorResponse};
+    use crate::{requests::ApiRequest, responses::ErrorResponse, WsError, WsMessage};
 
     #[derive(Clone)]
     pub struct WebSocketAdapter<S> {
@@ -357,27 +363,32 @@ mod websocket {
         }
     }
 
-    impl<S> Service<Message> for WebSocketAdapter<S>
+    impl<S> Service<WsMessage> for WebSocketAdapter<S>
     where
         S: Service<ApiRequest> + Clone,
         S::Response: Serialize,
         S::Future: Send + 'static,
         S::Error: Error + Serialize,
     {
-        type Response = Message;
-        type Error = tokio_tungstenite::tungstenite::Error;
+        type Response = WsMessage;
+        type Error = WsError;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, request: Message) -> Self::Future {
-            let body = if let Message::Text(body) = request {
+        fn call(&mut self, request: WsMessage) -> Self::Future {
+            let body = if let WsMessage::Text(body) = request {
                 body
             } else {
                 tracing::error!("received a non-text message: {request:?}");
-                return future::ok(Message::text("i only understand text messages")).boxed();
+                let error = ErrorResponse::NonTextMessage;
+                let message = WsMessage::text(
+                    serde_json::to_string(&error)
+                        .expect("failed to serialize error response to json"),
+                );
+                return future::ok(message).boxed();
             };
 
             let req = serde_json::from_str::<ApiRequest>(&body);
@@ -387,13 +398,13 @@ mod websocket {
                     .call(req)
                     .map(|body| {
                         Ok(match body {
-                            Ok(res) => Message::text(
+                            Ok(res) => WsMessage::text(
                                 serde_json::to_string(&res)
                                     .expect("failed to serialize response to json"),
                             ),
                             Err(err) => {
                                 tracing::error!("error occured while processing request: {err}");
-                                Message::text(
+                                WsMessage::text(
                                     serde_json::to_string(&err)
                                         .expect("failed to serialize error response to json"),
                                 )
@@ -404,7 +415,7 @@ mod websocket {
                 Err(e) => {
                     tracing::error!("failed to decode json body: {e}");
                     let error = ErrorResponse::bad_request("failed to decode request".into());
-                    future::ok(Message::text(
+                    future::ok(WsMessage::text(
                         serde_json::to_string(&error)
                             .expect("failed to serialize error response to json"),
                     ))
