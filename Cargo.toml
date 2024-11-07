@@ -2,6 +2,11 @@
 name = "jabroni"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "A web socket server"
+repository = "https://github.com/frectonz/jabroni"
+keywords = ["websockets"]
+categories = ["server"]
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive", "env"] }

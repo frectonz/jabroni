@@ -12,13 +12,12 @@ use futures::{
     StreamExt, TryStreamExt,
 };
 use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
 use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
 
-type WsError = tokio_tungstenite::tungstenite::Error;
-type WsMessage = tokio_tungstenite::tungstenite::Message;
-
 #[derive(Debug, Parser)]
+#[command(version, about)]
 struct Args {
     /// The address to bind to.
     #[arg(short, long, env, default_value = "127.0.0.1:3030")]
@@ -43,7 +42,7 @@ async fn main() -> color_eyre::Result<()> {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("gracefully shutting down");
         }
-        _ =  start(&args.address) => {
+        _ = start(&args.address) => {
             tracing::error!("server exited");
         }
     }
@@ -77,14 +76,14 @@ async fn start(address: &str) -> color_eyre::Result<()> {
                         Ok(()) => {
                             tracing::info!("web socket connect exited");
                         }
-                        Err(e) => {
-                            tracing::error!("failed to handle web socket connection: {e}");
+                        Err(err) => {
+                            tracing::error!("failed to handle web socket connection: {err}");
                         }
                     };
                 });
             }
-            Err(e) => {
-                tracing::error!("failed to accept tcp connection: {e}");
+            Err(err) => {
+                tracing::error!("failed to accept tcp connection: {err}");
             }
         }
     }
@@ -185,7 +184,7 @@ mod responses {
     }
 
     impl ErrorResponse {
-        pub fn bad_request(message: Box<str>) -> Self {
+        pub const fn bad_request(message: Box<str>) -> Self {
             Self::BadRequest(ErrorMessage { message })
         }
     }
@@ -246,21 +245,24 @@ mod db {
         type Error = InMemoryError;
 
         async fn set_var(&self, name: &str, value: &str) -> Result<(), InMemoryError> {
-            let mut map = self.map.lock().map_err(|e| {
-                tracing::error!("failed to get a lock: {e}");
-                InMemoryError::FailedToGetLock
-            })?;
-            map.insert(name.into(), value.into());
+            self.map
+                .lock()
+                .map_err(|e| {
+                    tracing::error!("failed to get a lock: {e}");
+                    InMemoryError::FailedToGetLock
+                })?
+                .insert(name.into(), value.into());
             Ok(())
         }
 
         async fn get_var(&self, name: &str) -> Result<Box<str>, InMemoryError> {
-            let map = self.map.lock().map_err(|e| {
-                tracing::error!("failed to get a lock: {e}");
-                InMemoryError::FailedToGetLock
-            })?;
-
-            let value = map
+            let value = self
+                .map
+                .lock()
+                .map_err(|e| {
+                    tracing::error!("failed to get a lock: {e}");
+                    InMemoryError::FailedToGetLock
+                })?
                 .get(name)
                 .ok_or(InMemoryError::NoValueFound(Value { name: name.into() }))?
                 .to_owned();
@@ -286,7 +288,7 @@ mod calculator {
 
     #[derive(Debug, Error, Serialize)]
     #[serde(tag = "type")]
-    pub enum CalculatorError {
+    pub enum Error {
         #[error("database error: {0}")]
         Database(#[from] InMemoryError),
     }
@@ -297,7 +299,7 @@ mod calculator {
     }
 
     impl<DB: Database> Calculator<DB> {
-        pub fn new(db: DB) -> Self {
+        pub const fn new(db: DB) -> Self {
             Self { db }
         }
     }
@@ -305,10 +307,10 @@ mod calculator {
     impl<DB> Service<ApiRequest> for Calculator<DB>
     where
         DB: Database + 'static,
-        CalculatorError: From<<DB as Database>::Error>,
+        Error: From<<DB as Database>::Error>,
     {
         type Response = ApiResponse;
-        type Error = CalculatorError;
+        type Error = Error;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -358,7 +360,7 @@ mod websocket {
     }
 
     impl<S> WebSocketAdapter<S> {
-        pub fn new(inner: S) -> Self {
+        pub const fn new(inner: S) -> Self {
             Self { inner }
         }
     }
@@ -379,9 +381,7 @@ mod websocket {
         }
 
         fn call(&mut self, request: WsMessage) -> Self::Future {
-            let body = if let WsMessage::Text(body) = request {
-                body
-            } else {
+            let WsMessage::Text(body) = request else {
                 tracing::error!("received a non-text message: {request:?}");
                 let error = ErrorResponse::NonTextMessage;
                 let message = WsMessage::text(
@@ -392,14 +392,15 @@ mod websocket {
             };
 
             let req = serde_json::from_str::<ApiRequest>(&body);
+
             match req {
                 Ok(req) => self
                     .inner
                     .call(req)
                     .map(|body| {
                         Ok(match body {
-                            Ok(res) => WsMessage::text(
-                                serde_json::to_string(&res)
+                            Ok(resp) => WsMessage::text(
+                                serde_json::to_string(&resp)
                                     .expect("failed to serialize response to json"),
                             ),
                             Err(err) => {
@@ -412,8 +413,8 @@ mod websocket {
                         })
                     })
                     .boxed(),
-                Err(e) => {
-                    tracing::error!("failed to decode json body: {e}");
+                Err(err) => {
+                    tracing::error!("failed to decode json body: {err}");
                     let error = ErrorResponse::bad_request("failed to decode request".into());
                     future::ok(WsMessage::text(
                         serde_json::to_string(&error)
