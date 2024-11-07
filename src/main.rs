@@ -281,22 +281,13 @@ mod calculator {
     use std::task::{Context, Poll};
 
     use futures::future;
-    use serde::Serialize;
-    use thiserror::Error;
     use tower::Service;
 
     use crate::{
-        db::{Database, InMemoryError},
+        db::Database,
         requests::{ApiRequest, GetVarRequest, SetVarRequest, TwoNumsRequest},
         responses::{ApiResponse, OpResult, VarResult},
     };
-
-    #[derive(Debug, Error, Serialize)]
-    #[serde(tag = "type")]
-    pub enum Error {
-        #[error("database error: {0}")]
-        Database(#[from] InMemoryError),
-    }
 
     #[derive(Clone)]
     pub struct Calculator<DB: Database> {
@@ -312,10 +303,9 @@ mod calculator {
     impl<DB> Service<ApiRequest> for Calculator<DB>
     where
         DB: Database + 'static,
-        Error: From<<DB as Database>::Error>,
     {
         type Response = ApiResponse;
-        type Error = Error;
+        type Error = DB::Error;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

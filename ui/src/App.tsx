@@ -65,9 +65,15 @@ const ErrorMessage = z.object({
   message: z.string(),
 });
 
+const Value = z.object({
+  name: z.string(),
+});
+
 const ErrorResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("BadRequest"), ...ErrorMessage.shape }),
   z.object({ type: z.literal("NonTextMessage") }),
+  z.object({ type: z.literal("FailedToGetLock") }),
+  z.object({ type: z.literal("NoValueFound"), ...Value.shape }),
 ]);
 
 type ApiResponse = z.infer<typeof ApiResponse>;
