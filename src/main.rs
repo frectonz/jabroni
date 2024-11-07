@@ -74,7 +74,7 @@ async fn start(address: &str) -> color_eyre::Result<()> {
 
                     match accept_connection(stream, svc).await {
                         Ok(()) => {
-                            tracing::info!("web socket connect exited");
+                            tracing::info!("web socket connection exited");
                         }
                         Err(err) => {
                             tracing::error!("failed to handle web socket connection: {err}");
