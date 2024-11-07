@@ -78,19 +78,21 @@ function $fetch(socket: WebSocket, request: ApiRequest): Promise<Response> {
   const request_id = request.request_id;
 
   const promise = new Promise<Response>((resolve, _) => {
-    socket.addEventListener("message", (event) => {
-      const resp = ApiResponse.safeParse(JSON.parse(event.data));
-      if (resp.data && resp.data.request_id == request_id) {
-        resolve({ data: resp.data });
-      }
-    });
-
-    socket.addEventListener("message", (event) => {
+    function handleMessage(event: MessageEvent<string>) {
       const error = ErrorResponse.safeParse(JSON.parse(event.data));
       if (error.data) {
-        resolve({ error: error.data });
+        socket.removeEventListener("message", handleMessage);
+        return resolve({ error: error.data });
       }
-    });
+
+      const resp = ApiResponse.safeParse(JSON.parse(event.data));
+      if (resp.data && resp.data.request_id == request_id) {
+        socket.removeEventListener("message", handleMessage);
+        return resolve({ data: resp.data });
+      }
+    }
+
+    socket.addEventListener("message", handleMessage);
   });
 
   socket.send(JSON.stringify({ ...request, request_id }));
