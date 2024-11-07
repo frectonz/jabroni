@@ -7,7 +7,7 @@ socket.addEventListener("open", () => {
   console.log("sending data", setVar);
   socket.send(JSON.stringify(setVar));
 
-  const getVar = { type: "GetVar", name: "hello" };
+  const getVar = { type: "GetVar", name: "hellox" };
   console.log("sending data", setVar);
   socket.send(JSON.stringify(getVar));
 });

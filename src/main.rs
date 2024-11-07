@@ -130,6 +130,23 @@ struct OpResult {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum ErrorResponse {
+    BadRequest(ErrorMessage),
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorMessage {
+    message: String,
+}
+
+impl ErrorResponse {
+    pub fn bad_request(message: String) -> Self {
+        Self::BadRequest(ErrorMessage { message })
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct VarResult {
     name: String,
     value: String,
@@ -150,23 +167,16 @@ async fn accept_connection(
 
     let (write, read) = ws_stream.split();
 
-    poll_fn(|ctx| {
-        let mut svc = svc.lock().unwrap();
-        svc.poll_ready(ctx)
-    })
-    .await
-    .unwrap();
-
     read.try_filter(|msg| future::ready(msg.is_text()))
         .and_then(|msg| {
             let svc = svc.clone();
             poll_fn(move |ctx| {
-                let mut svc = svc.lock().unwrap();
+                let mut svc = svc.lock().expect("failed to get a lock on service");
                 svc.poll_ready(ctx).map_ok(|()| msg.clone())
             })
         })
         .and_then(|msg| {
-            let mut svc = svc.lock().unwrap();
+            let mut svc = svc.lock().expect("failed to get a lock on service");
             svc.call(msg)
         })
         .forward(write)
@@ -181,14 +191,22 @@ mod db {
         sync::{Arc, Mutex},
     };
 
+    use serde::Serialize;
+    use thiserror::Error;
+
     pub trait Database: Clone + Send {
+        type Error: std::error::Error + Serialize;
+
         fn set_var(
             &self,
             name: String,
             value: String,
-        ) -> impl std::future::Future<Output = ()> + Send;
+        ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-        fn get_var(&self, name: String) -> impl std::future::Future<Output = String> + Send;
+        fn get_var(
+            &self,
+            name: String,
+        ) -> impl std::future::Future<Output = Result<String, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
@@ -204,15 +222,44 @@ mod db {
         }
     }
 
+    #[derive(Debug, Error, Serialize)]
+    #[serde(tag = "type")]
+    pub enum InMemoryError {
+        #[error("failed to get database lock")]
+        FailedToGetLock,
+        #[error("no value found for {0:?}")]
+        NoValueFound(Value),
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct Value {
+        name: String,
+    }
+
     impl Database for InMemory {
-        async fn set_var(&self, name: String, value: String) {
-            let mut map = self.map.lock().unwrap();
+        type Error = InMemoryError;
+
+        async fn set_var(&self, name: String, value: String) -> Result<(), InMemoryError> {
+            let mut map = self.map.lock().map_err(|e| {
+                tracing::error!("failed to get a lock: {e}");
+                InMemoryError::FailedToGetLock
+            })?;
             map.insert(name, value);
+            Ok(())
         }
 
-        async fn get_var(&self, name: String) -> String {
-            let map = self.map.lock().unwrap();
-            map.get(&name).unwrap().to_owned()
+        async fn get_var(&self, name: String) -> Result<String, InMemoryError> {
+            let map = self.map.lock().map_err(|e| {
+                tracing::error!("failed to get a lock: {e}");
+                InMemoryError::FailedToGetLock
+            })?;
+
+            let value = map
+                .get(&name)
+                .ok_or(InMemoryError::NoValueFound(Value { name }))?
+                .to_owned();
+
+            Ok(value)
         }
     }
 }
@@ -221,12 +268,21 @@ mod calculator {
     use std::task::{Context, Poll};
 
     use futures::future;
+    use serde::Serialize;
+    use thiserror::Error;
     use tower::Service;
 
     use crate::{
-        db::Database, ApiRequest, ApiResponse, GetVarRequest, OpResult, SetVarRequest,
-        TwoNumsRequest, VarResult,
+        db::{Database, InMemoryError},
+        ApiRequest, ApiResponse, GetVarRequest, OpResult, SetVarRequest, TwoNumsRequest, VarResult,
     };
+
+    #[derive(Debug, Error, Serialize)]
+    #[serde(tag = "type")]
+    pub enum CalculatorError {
+        #[error("database error: {0}")]
+        Database(#[from] InMemoryError),
+    }
 
     #[derive(Clone)]
     pub struct Calculator<DB: Database> {
@@ -242,9 +298,10 @@ mod calculator {
     impl<DB> Service<ApiRequest> for Calculator<DB>
     where
         DB: Database + 'static,
+        CalculatorError: From<<DB as Database>::Error>,
     {
         type Response = ApiResponse;
-        type Error = tower::BoxError;
+        type Error = CalculatorError;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -263,11 +320,11 @@ mod calculator {
                         result: x.wrapping_sub(y),
                     }),
                     ApiRequest::SetVar(SetVarRequest { name, value }) => {
-                        db.set_var(name.clone(), value.clone()).await;
+                        db.set_var(name.clone(), value.clone()).await?;
                         ApiResponse::SetVar(VarResult { name, value })
                     }
                     ApiRequest::GetVar(GetVarRequest { name }) => {
-                        let value = db.get_var(name.clone()).await;
+                        let value = db.get_var(name.clone()).await?;
                         ApiResponse::GetVar(VarResult { name, value })
                     }
                 })
@@ -277,21 +334,26 @@ mod calculator {
 }
 
 mod websocket {
-    use std::task::{Context, Poll};
+    use std::{
+        error::Error,
+        task::{Context, Poll},
+    };
 
     use futures::{future, FutureExt};
     use serde::Serialize;
     use tokio_tungstenite::tungstenite::Message;
     use tower::{Layer, Service};
 
-    use crate::ApiRequest;
+    use crate::{ApiRequest, ErrorResponse};
 
     #[derive(Clone)]
-    pub struct WebSocketAdapter<S>(S);
+    pub struct WebSocketAdapter<S> {
+        inner: S,
+    }
 
     impl<S> WebSocketAdapter<S> {
         pub fn new(inner: S) -> Self {
-            Self(inner)
+            Self { inner }
         }
     }
 
@@ -300,6 +362,7 @@ mod websocket {
         S: Service<ApiRequest> + Clone,
         S::Response: Serialize,
         S::Future: Send + 'static,
+        S::Error: Error + Serialize,
     {
         type Response = Message;
         type Error = tokio_tungstenite::tungstenite::Error;
@@ -310,33 +373,43 @@ mod websocket {
         }
 
         fn call(&mut self, request: Message) -> Self::Future {
-            if let Message::Text(body) = request {
-                let req = serde_json::from_str::<ApiRequest>(&body);
-                match req {
-                    Ok(req) => {
-                        let res = self
-                            .0
-                            .call(req)
-                            .map(|body| {
-                                Ok(match body {
-                                    Ok(res) => Message::text(serde_json::to_string(&res).unwrap()),
-                                    Err(_) => {
-                                        Message::text("error occured while processing request")
-                                    }
-                                })
-                            })
-                            .boxed();
-
-                        res
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to decode json body: {e}");
-                        future::ok(Message::text("failed to decode json body")).boxed()
-                    }
-                }
+            let body = if let Message::Text(body) = request {
+                body
             } else {
                 tracing::error!("received a non-text message: {request:?}");
-                future::ok(Message::text("i only understand text messages")).boxed()
+                return future::ok(Message::text("i only understand text messages")).boxed();
+            };
+
+            let req = serde_json::from_str::<ApiRequest>(&body);
+            match req {
+                Ok(req) => self
+                    .inner
+                    .call(req)
+                    .map(|body| {
+                        Ok(match body {
+                            Ok(res) => Message::text(
+                                serde_json::to_string(&res)
+                                    .expect("failed to serialize response to json"),
+                            ),
+                            Err(err) => {
+                                tracing::error!("error occured while processing request: {err}");
+                                Message::text(
+                                    serde_json::to_string(&err)
+                                        .expect("failed to serialize error response to json"),
+                                )
+                            }
+                        })
+                    })
+                    .boxed(),
+                Err(e) => {
+                    tracing::error!("failed to decode json body: {e}");
+                    let error = ErrorResponse::bad_request("failed to decode request".into());
+                    future::ok(Message::text(
+                        serde_json::to_string(&error)
+                            .expect("failed to serialize error response to json"),
+                    ))
+                    .boxed()
+                }
             }
         }
     }
