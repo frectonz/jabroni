@@ -39,18 +39,15 @@ const ApiRequest = z.discriminatedUnion("type", [
 
 type ApiRequest = z.infer<typeof ApiRequest>;
 
-// Define OpResult structure
 const OpResult = z.object({
-  result: z.number().int().min(0).max(255), // assuming u8 type, range is 0-255
+  result: z.number().int().min(0).max(255),
 });
 
-// Define VarResult structure
 const VarResult = z.object({
   name: z.string(),
   value: z.string(),
 });
 
-// Define ApiResponse tagged union
 const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("Add"), ...OpResult.shape }),
   z.object({ type: z.literal("Sub"), ...OpResult.shape }),
@@ -58,12 +55,10 @@ const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GetVar"), ...VarResult.shape }),
 ]);
 
-// Define ErrorMessage structure
 const ErrorMessage = z.object({
   message: z.string(),
 });
 
-// Define ErrorResponse tagged union
 const ErrorResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("BadRequest"), ...ErrorMessage.shape }),
   z.object({ type: z.literal("NonTextMessage") }),
