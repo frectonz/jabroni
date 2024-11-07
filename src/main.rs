@@ -134,17 +134,20 @@ mod requests {
     pub struct TwoNumsRequest {
         pub x: u8,
         pub y: u8,
+        pub request_id: Box<str>,
     }
 
     #[derive(Debug, Deserialize)]
     pub struct SetVarRequest {
         pub name: Box<str>,
         pub value: Box<str>,
+        pub request_id: Box<str>,
     }
 
     #[derive(Debug, Deserialize)]
     pub struct GetVarRequest {
         pub name: Box<str>,
+        pub request_id: Box<str>,
     }
 }
 
@@ -163,12 +166,14 @@ mod responses {
     #[derive(Debug, Serialize)]
     pub struct OpResult {
         pub result: u8,
+        pub request_id: Box<str>,
     }
 
     #[derive(Debug, Serialize)]
     pub struct VarResult {
         pub name: Box<str>,
         pub value: Box<str>,
+        pub request_id: Box<str>,
     }
 
     #[derive(Debug, Serialize)]
@@ -322,19 +327,37 @@ mod calculator {
 
             Box::pin(async move {
                 Ok(match request {
-                    ApiRequest::Add(TwoNumsRequest { x, y }) => ApiResponse::Add(OpResult {
-                        result: x.wrapping_add(y),
-                    }),
-                    ApiRequest::Sub(TwoNumsRequest { x, y }) => ApiResponse::Sub(OpResult {
-                        result: x.wrapping_sub(y),
-                    }),
-                    ApiRequest::SetVar(SetVarRequest { name, value }) => {
-                        db.set_var(&name, &value).await?;
-                        ApiResponse::SetVar(VarResult { name, value })
+                    ApiRequest::Add(TwoNumsRequest { x, y, request_id }) => {
+                        ApiResponse::Add(OpResult {
+                            result: x.wrapping_add(y),
+                            request_id,
+                        })
                     }
-                    ApiRequest::GetVar(GetVarRequest { name }) => {
+                    ApiRequest::Sub(TwoNumsRequest { x, y, request_id }) => {
+                        ApiResponse::Sub(OpResult {
+                            result: x.wrapping_sub(y),
+                            request_id,
+                        })
+                    }
+                    ApiRequest::SetVar(SetVarRequest {
+                        name,
+                        value,
+                        request_id,
+                    }) => {
+                        db.set_var(&name, &value).await?;
+                        ApiResponse::SetVar(VarResult {
+                            name,
+                            value,
+                            request_id,
+                        })
+                    }
+                    ApiRequest::GetVar(GetVarRequest { name, request_id }) => {
                         let value = db.get_var(&name).await?;
-                        ApiResponse::GetVar(VarResult { name, value })
+                        ApiResponse::GetVar(VarResult {
+                            name,
+                            value,
+                            request_id,
+                        })
                     }
                 })
             })

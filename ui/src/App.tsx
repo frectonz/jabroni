@@ -1,6 +1,7 @@
 import { FormEvent } from "react";
 
 import { z } from "zod";
+import { nanoid } from "nanoid";
 import { useMutation } from "@tanstack/react-query";
 
 let socket: WebSocket | undefined;
@@ -19,15 +20,18 @@ export function useWebSocket() {
 const TwoNumsRequest = z.object({
   x: z.number().int().min(0).max(255),
   y: z.number().int().min(0).max(255),
+  request_id: z.string().default(nanoid()),
 });
 
 const SetVarRequest = z.object({
   name: z.string(),
   value: z.string(),
+  request_id: z.string().default(nanoid()),
 });
 
 const GetVarRequest = z.object({
   name: z.string(),
+  request_id: z.string().default(nanoid()),
 });
 
 const ApiRequest = z.discriminatedUnion("type", [
@@ -41,11 +45,13 @@ type ApiRequest = z.infer<typeof ApiRequest>;
 
 const OpResult = z.object({
   result: z.number().int().min(0).max(255),
+  request_id: z.string(),
 });
 
 const VarResult = z.object({
   name: z.string(),
   value: z.string(),
+  request_id: z.string(),
 });
 
 const ApiResponse = z.discriminatedUnion("type", [
@@ -66,20 +72,28 @@ const ErrorResponse = z.discriminatedUnion("type", [
 
 type ApiResponse = z.infer<typeof ApiResponse>;
 type ApiErrorResponse = z.infer<typeof ErrorResponse>;
-
 type Response = { data: ApiResponse } | { error: ApiErrorResponse };
+
 function $fetch(socket: WebSocket, request: ApiRequest): Promise<Response> {
+  const request_id = request.request_id;
+
   const promise = new Promise<Response>((resolve, _) => {
     socket.addEventListener("message", (event) => {
-      resolve({ data: JSON.parse(event.data) });
+      const resp = ApiResponse.safeParse(JSON.parse(event.data));
+      if (resp.data && resp.data.request_id == request_id) {
+        resolve({ data: resp.data });
+      }
     });
+
     socket.addEventListener("message", (event) => {
-      resolve({ error: JSON.parse(event.data) });
+      const error = ErrorResponse.safeParse(JSON.parse(event.data));
+      if (error.data) {
+        resolve({ error: error.data });
+      }
     });
   });
 
-  socket.send(JSON.stringify(request));
-
+  socket.send(JSON.stringify({ ...request, request_id }));
   return promise;
 }
 
