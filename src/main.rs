@@ -22,7 +22,7 @@ type WsMessage = tokio_tungstenite::tungstenite::Message;
 struct Args {
     /// The address to bind to.
     #[arg(short, long, env, default_value = "127.0.0.1:3030")]
-    address: String,
+    address: Box<str>,
 }
 
 #[tokio::main]
@@ -139,13 +139,13 @@ mod requests {
 
     #[derive(Debug, Deserialize)]
     pub struct SetVarRequest {
-        pub name: String,
-        pub value: String,
+        pub name: Box<str>,
+        pub value: Box<str>,
     }
 
     #[derive(Debug, Deserialize)]
     pub struct GetVarRequest {
-        pub name: String,
+        pub name: Box<str>,
     }
 }
 
@@ -168,8 +168,8 @@ mod responses {
 
     #[derive(Debug, Serialize)]
     pub struct VarResult {
-        pub name: String,
-        pub value: String,
+        pub name: Box<str>,
+        pub value: Box<str>,
     }
 
     #[derive(Debug, Serialize)]
@@ -181,11 +181,11 @@ mod responses {
 
     #[derive(Debug, Serialize)]
     pub struct ErrorMessage {
-        message: String,
+        message: Box<str>,
     }
 
     impl ErrorResponse {
-        pub fn bad_request(message: String) -> Self {
+        pub fn bad_request(message: Box<str>) -> Self {
             Self::BadRequest(ErrorMessage { message })
         }
     }
@@ -205,19 +205,19 @@ mod db {
 
         fn set_var(
             &self,
-            name: String,
-            value: String,
+            name: &str,
+            value: &str,
         ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
         fn get_var(
             &self,
-            name: String,
-        ) -> impl std::future::Future<Output = Result<String, Self::Error>> + Send;
+            name: &str,
+        ) -> impl std::future::Future<Output = Result<Box<str>, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
     pub struct InMemory {
-        map: Arc<Mutex<HashMap<String, String>>>,
+        map: Arc<Mutex<HashMap<Box<str>, Box<str>>>>,
     }
 
     impl InMemory {
@@ -239,30 +239,30 @@ mod db {
 
     #[derive(Debug, Serialize)]
     pub struct Value {
-        name: String,
+        name: Box<str>,
     }
 
     impl Database for InMemory {
         type Error = InMemoryError;
 
-        async fn set_var(&self, name: String, value: String) -> Result<(), InMemoryError> {
+        async fn set_var(&self, name: &str, value: &str) -> Result<(), InMemoryError> {
             let mut map = self.map.lock().map_err(|e| {
                 tracing::error!("failed to get a lock: {e}");
                 InMemoryError::FailedToGetLock
             })?;
-            map.insert(name, value);
+            map.insert(name.into(), value.into());
             Ok(())
         }
 
-        async fn get_var(&self, name: String) -> Result<String, InMemoryError> {
+        async fn get_var(&self, name: &str) -> Result<Box<str>, InMemoryError> {
             let map = self.map.lock().map_err(|e| {
                 tracing::error!("failed to get a lock: {e}");
                 InMemoryError::FailedToGetLock
             })?;
 
             let value = map
-                .get(&name)
-                .ok_or(InMemoryError::NoValueFound(Value { name }))?
+                .get(name)
+                .ok_or(InMemoryError::NoValueFound(Value { name: name.into() }))?
                 .to_owned();
 
             Ok(value)
@@ -327,11 +327,11 @@ mod calculator {
                         result: x.wrapping_sub(y),
                     }),
                     ApiRequest::SetVar(SetVarRequest { name, value }) => {
-                        db.set_var(name.clone(), value.clone()).await?;
+                        db.set_var(&name, &value).await?;
                         ApiResponse::SetVar(VarResult { name, value })
                     }
                     ApiRequest::GetVar(GetVarRequest { name }) => {
-                        let value = db.get_var(name.clone()).await?;
+                        let value = db.get_var(&name).await?;
                         ApiResponse::GetVar(VarResult { name, value })
                     }
                 })
