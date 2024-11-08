@@ -111,7 +111,6 @@ async fn accept_connection(stream: TcpStream) {
                 .await
                 .expect("service couldn't get ready");
             let msg = svc.call(msg).await.expect("service returned an error");
-
             tx.send(msg).expect("failed to send message to client");
         });
     }
@@ -385,7 +384,7 @@ mod websocket {
         S::Error: Error + Serialize,
     {
         type Response = WsMessage;
-        type Error = std::convert::Infallible;
+        type Error = ();
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -393,14 +392,19 @@ mod websocket {
         }
 
         fn call(&mut self, request: WsMessage) -> Self::Future {
-            let WsMessage::Text(body) = request else {
-                tracing::error!("received a non-text message: {request:?}");
-                let error = ErrorResponse::NonTextMessage;
-                let message = WsMessage::text(
-                    serde_json::to_string(&error)
-                        .expect("failed to serialize error response to json"),
-                );
-                return future::ok(message).boxed();
+            let body = match request {
+                WsMessage::Text(body) => body,
+                WsMessage::Close(_) => {
+                    return future::ready(Err(())).boxed();
+                }
+                _ => {
+                    let error = ErrorResponse::NonTextMessage;
+                    let message = WsMessage::text(
+                        serde_json::to_string(&error)
+                            .expect("failed to serialize error response to json"),
+                    );
+                    return future::ok(message).boxed();
+                }
             };
 
             let req = serde_json::from_str::<ApiRequest>(&body);
