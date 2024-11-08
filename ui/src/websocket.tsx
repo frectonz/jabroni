@@ -14,6 +14,8 @@ function getWebSocket() {
   return socket;
 }
 
+getWebSocket();
+
 export type Request = z.infer<typeof ApiRequest>;
 export type Response =
   | { data: z.infer<typeof ApiResponse> }
