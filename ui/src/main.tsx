@@ -1,18 +1,11 @@
 import "./index.css";
 
-import React, { StrictMode } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import App from "./App.tsx";
-
-const ReactQueryDevtools = import.meta.env.PROD
-  ? () => null // Render nothing in production
-  : React.lazy(() =>
-      import("@tanstack/react-query-devtools").then((res) => ({
-        default: res.ReactQueryDevtools,
-      })),
-    );
+import ReactQueryDevtools from "./react-devtools.tsx";
 
 const queryClient = new QueryClient();
 

@@ -5,7 +5,6 @@ use std::{
 
 use calculator::Calculator;
 use clap::Parser;
-use color_eyre::eyre::Context;
 use db::InMemory;
 use futures::{
     future::{self, poll_fn},
@@ -51,6 +50,8 @@ async fn main() -> color_eyre::Result<()> {
 }
 
 async fn start(address: &str) -> color_eyre::Result<()> {
+    use color_eyre::eyre::Context;
+
     let listener = TcpListener::bind(address)
         .await
         .context("failed to create tcp listener")?;
