@@ -35,7 +35,7 @@ async fn main() -> color_eyre::Result<()> {
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("gracefully shutting down");
+            tracing::info!("shutting down gracefully due to CTRL+C signal");
         }
         _ = start(&args.address) => {
             tracing::error!("server exited");
@@ -73,11 +73,11 @@ async fn accept_connection(stream: TcpStream) {
 
     let (mut ws_tx, mut ws_rx) = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws_stream) => {
-            tracing::info!("new web socket connection established");
+            tracing::info!("new websocket connection established");
             ws_stream.split()
         }
         Err(err) => {
-            tracing::error!("failed to a establish websocket connection: {err}");
+            tracing::error!("failed to establish websocket connection: {err}");
             return;
         }
     };
@@ -113,7 +113,7 @@ async fn accept_connection(stream: TcpStream) {
         tokio::spawn(async move {
             poll_fn(|ctx| svc.poll_ready(ctx))
                 .await
-                .unwrap_or_else(|()| tracing::error!("service couldn't get ready"));
+                .unwrap_or_else(|()| tracing::error!("service failed to become ready"));
 
             svc.call(msg)
                 .await
@@ -262,7 +262,7 @@ mod db {
             self.map
                 .lock()
                 .map_err(|e| {
-                    tracing::error!("failed to get a lock: {e}");
+                    tracing::error!("failed to acquire database lock for `set_var` operation: {e}");
                     InMemoryError::FailedToGetLock
                 })?
                 .insert(name.into(), value.into());
@@ -274,7 +274,7 @@ mod db {
                 .map
                 .lock()
                 .map_err(|e| {
-                    tracing::error!("failed to get a lock: {e}");
+                    tracing::error!("failed to acquire database lock for `get_var` operation: {e}");
                     InMemoryError::FailedToGetLock
                 })?
                 .get(name)
@@ -409,6 +409,8 @@ mod websocket {
                     return future::ready(Err(())).boxed();
                 }
                 _ => {
+                    tracing::warn!("received unsupported websocket message type");
+
                     let error = ErrorResponse::NonTextMessage;
                     let message = WsMessage::text(
                         serde_json::to_string(&error)
@@ -441,7 +443,7 @@ mod websocket {
                     })
                     .boxed(),
                 Err(err) => {
-                    tracing::error!("failed to decode json body: {err}");
+                    tracing::error!("failed to decode json request body: {err}");
                     let error = ErrorResponse::bad_request("failed to decode request".into());
                     future::ok(WsMessage::text(
                         serde_json::to_string(&error)
