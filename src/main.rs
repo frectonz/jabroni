@@ -1,18 +1,14 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-
 use calculator::Calculator;
 use clap::Parser;
 use db::InMemory;
-use futures::{
-    future::{self, poll_fn},
-    StreamExt, TryStreamExt,
+use futures::{future::poll_fn, SinkExt, StreamExt};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::mpsc,
 };
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
-use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tower::{Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
 
 #[derive(Debug, Parser)]
@@ -57,30 +53,12 @@ async fn start(address: &str) -> color_eyre::Result<()> {
         .context("failed to create tcp listener")?;
     tracing::info!("listening on: {}", address);
 
-    let db = InMemory::new();
-
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
-                let db = db.clone();
                 tokio::spawn(async move {
                     tracing::info!("accepting connection to {peer_addr}");
-
-                    let svc = ServiceBuilder::new()
-                        .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
-                        .layer(WebSocketAdapterLayer)
-                        .service(Calculator::new(db));
-
-                    let svc = Arc::new(Mutex::new(svc));
-
-                    match accept_connection(stream, svc).await {
-                        Ok(()) => {
-                            tracing::info!("web socket connection exited");
-                        }
-                        Err(err) => {
-                            tracing::error!("failed to handle web socket connection: {err}");
-                        }
-                    };
+                    accept_connection(stream).await;
                 });
             }
             Err(err) => {
@@ -90,33 +68,53 @@ async fn start(address: &str) -> color_eyre::Result<()> {
     }
 }
 
-async fn accept_connection(
-    stream: TcpStream,
-    svc: Arc<Mutex<impl Service<WsMessage, Response = WsMessage, Error = WsError>>>,
-) -> Result<(), WsError> {
+async fn accept_connection(stream: TcpStream) {
     tracing::info!("accepted connection");
 
-    let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+    let ws_stream = tokio_tungstenite::accept_async(stream)
+        .await
+        .expect("failed to establish websocket connection");
     tracing::info!("new web socket connection established");
 
-    let (write, read) = ws_stream.split();
+    let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-    read.try_filter(|msg| future::ready(msg.is_text()))
-        .and_then(|msg| {
-            let svc = svc.clone();
-            poll_fn(move |ctx| {
-                let mut svc = svc.lock().expect("failed to get a lock on service");
-                svc.poll_ready(ctx).map_ok(|()| msg.clone())
-            })
-        })
-        .and_then(|msg| {
-            let mut svc = svc.lock().expect("failed to get a lock on service");
-            svc.call(msg)
-        })
-        .forward(write)
-        .await?;
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mut rx = UnboundedReceiverStream::new(rx);
 
-    Ok(())
+    tokio::task::spawn(async move {
+        while let Some(message) = rx.next().await {
+            ws_tx.send(message).await.unwrap_or_else(|err| {
+                tracing::error!("websocket send error: {err}");
+            });
+        }
+    });
+
+    let svc = Box::new(
+        ServiceBuilder::new()
+            .layer(WebSocketAdapterLayer)
+            .service(Calculator::new(InMemory::new())),
+    );
+
+    while let Some(result) = ws_rx.next().await {
+        let msg = match result {
+            Ok(msg) => msg,
+            Err(err) => {
+                tracing::error!("failed to recieve mesage: {err}");
+                break;
+            }
+        };
+
+        let tx = tx.clone();
+        let mut svc = svc.clone();
+        tokio::spawn(async move {
+            poll_fn(|ctx| svc.poll_ready(ctx))
+                .await
+                .expect("service couldn't get ready");
+            let msg = svc.call(msg).await.expect("service returned an error");
+
+            tx.send(msg).expect("failed to send message to client");
+        });
+    }
 }
 
 mod requests {
@@ -366,7 +364,7 @@ mod websocket {
     use serde::Serialize;
     use tower::{Layer, Service};
 
-    use crate::{requests::ApiRequest, responses::ErrorResponse, WsError, WsMessage};
+    use crate::{requests::ApiRequest, responses::ErrorResponse, WsMessage};
 
     #[derive(Clone)]
     pub struct WebSocketAdapter<S> {
@@ -387,7 +385,7 @@ mod websocket {
         S::Error: Error + Serialize,
     {
         type Response = WsMessage;
-        type Error = WsError;
+        type Error = std::convert::Infallible;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
