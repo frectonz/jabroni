@@ -2,7 +2,7 @@ import { FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 
 import { ApiRequest } from "./schema";
-import { $fetch, Request } from "./websocket";
+import benchmark, { $fetch, Request } from "./websocket";
 
 function App() {
   const { data, mutate } = useMutation({
@@ -98,6 +98,8 @@ function App() {
           <input type="submit" value="Get Var" />
         </fieldset>
       </form>
+
+      <button onClick={benchmark}>Benchmark</button>
     </>
   );
 }
