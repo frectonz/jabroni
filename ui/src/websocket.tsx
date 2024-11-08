@@ -1,20 +1,32 @@
 import { z } from "zod";
 import { ApiRequest, ErrorResponse, ApiResponse } from "./schema";
 
-let socket: WebSocket | undefined;
-function getWebSocket() {
-  if (!socket) {
-    socket = new WebSocket("ws://127.0.0.1:3030");
+let sockets: WebSocket[] = [];
+let connectionIndex = 0;
+
+function initWebSocketPool(connectionCount: number): void {
+  sockets = Array.from({ length: connectionCount }, () => {
+    const socket = new WebSocket("ws://127.0.0.1:3030");
 
     socket.onopen = () => console.log("WebSocket connected");
     socket.onclose = () => console.log("WebSocket disconnected");
     socket.onerror = (error) => console.error("WebSocket error:", error);
+
+    return socket;
+  });
+}
+
+function getWebSocket(): WebSocket {
+  if (sockets.length === 0) {
+    throw new Error("WebSocket pool is not initialized. Call initWebSocketPool first.");
   }
 
+  const socket = sockets[connectionIndex];
+  connectionIndex = (connectionIndex + 1) % sockets.length;
   return socket;
 }
 
-getWebSocket();
+initWebSocketPool(3);
 
 export type Request = z.infer<typeof ApiRequest>;
 export type Response =
