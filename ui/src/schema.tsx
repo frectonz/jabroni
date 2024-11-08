@@ -4,18 +4,18 @@ import { nanoid } from "nanoid";
 const TwoNumsRequest = z.object({
   x: z.number().int().min(0).max(255),
   y: z.number().int().min(0).max(255),
-  request_id: z.string().default(nanoid()),
+  request_id: z.string().default(() => nanoid()),
 });
 
 const SetVarRequest = z.object({
   name: z.string(),
   value: z.string(),
-  request_id: z.string().default(nanoid()),
+  request_id: z.string().default(() => nanoid()),
 });
 
 const GetVarRequest = z.object({
   name: z.string(),
-  request_id: z.string().default(nanoid()),
+  request_id: z.string().default(() => nanoid()),
 });
 
 export const ApiRequest = z.discriminatedUnion("type", [
