@@ -71,12 +71,16 @@ async fn start(address: &str) -> color_eyre::Result<()> {
 async fn accept_connection(stream: TcpStream) {
     tracing::info!("accepted connection");
 
-    let ws_stream = tokio_tungstenite::accept_async(stream)
-        .await
-        .expect("failed to establish websocket connection");
-    tracing::info!("new web socket connection established");
-
-    let (mut ws_tx, mut ws_rx) = ws_stream.split();
+    let (mut ws_tx, mut ws_rx) = match tokio_tungstenite::accept_async(stream).await {
+        Ok(ws_stream) => {
+            tracing::info!("new web socket connection established");
+            ws_stream.split()
+        }
+        Err(err) => {
+            tracing::error!("failed to a establish websocket connection: {err}");
+            return;
+        }
+    };
 
     let (tx, rx) = mpsc::unbounded_channel();
     let mut rx = UnboundedReceiverStream::new(rx);
@@ -109,9 +113,16 @@ async fn accept_connection(stream: TcpStream) {
         tokio::spawn(async move {
             poll_fn(|ctx| svc.poll_ready(ctx))
                 .await
-                .expect("service couldn't get ready");
-            let msg = svc.call(msg).await.expect("service returned an error");
-            tx.send(msg).expect("failed to send message to client");
+                .unwrap_or_else(|()| tracing::error!("service couldn't get ready"));
+
+            svc.call(msg)
+                .await
+                .map_err(|()| tracing::error!("service returned an error"))
+                .and_then(|msg| {
+                    tx.send(msg)
+                        .map_err(|e| tracing::error!("failed to send message to client: {e}"))
+                })
+                .unwrap_or_else(|()| tracing::error!("failed to handle message"));
         });
     }
 }
