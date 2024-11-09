@@ -85,7 +85,7 @@ async fn accept_connection(stream: TcpStream) {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut rx = UnboundedReceiverStream::new(rx);
 
-    tokio::task::spawn(async move {
+    tokio::spawn(async move {
         while let Some(message) = rx.next().await {
             ws_tx.send(message).await.unwrap_or_else(|err| {
                 tracing::error!("websocket send error: {err}");
@@ -115,14 +115,16 @@ async fn accept_connection(stream: TcpStream) {
                 .await
                 .unwrap_or_else(|()| tracing::error!("service failed to become ready"));
 
-            svc.call(msg)
-                .await
-                .map_err(|()| tracing::error!("service returned an error"))
-                .and_then(|msg| {
+            match svc.call(msg).await {
+                Ok(msg) => {
                     tx.send(msg)
                         .map_err(|e| tracing::error!("failed to send message to client: {e}"))
-                })
-                .unwrap_or_else(|()| tracing::error!("failed to handle message"));
+                        .unwrap_or_default();
+                }
+                Err(()) => {
+                    tracing::warn!("connection is closed");
+                }
+            };
         });
     }
 }
@@ -426,31 +428,36 @@ mod websocket {
                 Ok(req) => self
                     .inner
                     .call(req)
-                    .map(|body| {
-                        Ok(match body {
-                            Ok(resp) => WsMessage::text(
-                                serde_json::to_string(&resp)
-                                    .expect("failed to serialize response to json"),
-                            ),
-                            Err(err) => {
-                                tracing::error!("error occured while processing request: {err}");
-                                WsMessage::text(
-                                    serde_json::to_string(&err)
-                                        .expect("failed to serialize error response to json"),
-                                )
-                            }
-                        })
-                    })
+                    .map(|body| Ok(to_message(body)))
                     .boxed(),
                 Err(err) => {
                     tracing::error!("failed to decode json request body: {err}");
-                    let error = ErrorResponse::bad_request("failed to decode request".into());
-                    future::ok(WsMessage::text(
-                        serde_json::to_string(&error)
-                            .expect("failed to serialize error response to json"),
-                    ))
-                    .boxed()
+                    let err = ErrorResponse::bad_request("failed to decode request".into());
+                    let err = serde_json::to_string(&err)
+                        .expect("failed to serialize error response to json");
+                    future::ok(WsMessage::text(err)).boxed()
                 }
+            }
+        }
+    }
+
+    fn to_message<R, E>(body: Result<R, E>) -> WsMessage
+    where
+        R: Serialize,
+        E: Serialize + Error,
+    {
+        match body {
+            Ok(resp) => {
+                let resp =
+                    serde_json::to_string(&resp).expect("failed to serialize response to json");
+                WsMessage::text(resp)
+            }
+
+            Err(err) => {
+                tracing::error!("error occured while processing request: {err}");
+                let err = serde_json::to_string(&err)
+                    .expect("failed to serialize error response to json");
+                WsMessage::text(err)
             }
         }
     }
