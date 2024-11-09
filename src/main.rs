@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use calculator::Calculator;
+use app::App;
 use clap::Parser;
-use db::InMemory;
+use db::SqlxDatabase;
 use futures::{future::poll_fn, SinkExt, StreamExt};
 use responses::ErrorResponse;
 use tokio::{
@@ -17,6 +17,10 @@ use websocket::WebSocketAdapterLayer;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
+    /// Path to the sqlite database file.
+    #[arg(env)]
+    database: Box<str>,
+
     /// The address to bind to.
     #[arg(short, long, env, default_value = "127.0.0.1:3030")]
     address: Box<str>,
@@ -34,13 +38,13 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let args = Args::parse();
-    tracing::info!("parsed command line arguments: {args:?}");
+    let db = SqlxDatabase::new(args.database).await?;
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("shutting down gracefully due to CTRL+C signal");
         }
-        _ = start(&args.address) => {
+        _ = start(&args.address, db) => {
             tracing::error!("server exited");
         }
     }
@@ -48,7 +52,7 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-async fn start(address: &str) -> color_eyre::Result<()> {
+async fn start(address: &str, db: SqlxDatabase) -> color_eyre::Result<()> {
     use color_eyre::eyre::Context;
 
     let listener = TcpListener::bind(address)
@@ -59,9 +63,10 @@ async fn start(address: &str) -> color_eyre::Result<()> {
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
+                let db = db.clone();
                 tokio::spawn(async move {
                     tracing::info!("accepting connection to {peer_addr}");
-                    accept_connection(stream).await;
+                    accept_connection(stream, db).await;
                 });
             }
             Err(err) => {
@@ -71,7 +76,7 @@ async fn start(address: &str) -> color_eyre::Result<()> {
     }
 }
 
-async fn accept_connection(stream: TcpStream) {
+async fn accept_connection(stream: TcpStream, db: SqlxDatabase) {
     tracing::info!("accepted connection");
 
     let (mut ws_tx, mut ws_rx) = match tokio_tungstenite::accept_async(stream).await {
@@ -99,7 +104,7 @@ async fn accept_connection(stream: TcpStream) {
     let svc = ServiceBuilder::new()
         .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
         .layer(WebSocketAdapterLayer)
-        .service(Calculator::new(InMemory::new()));
+        .service(App::new(db));
 
     let svc = Arc::new(Mutex::new(svc));
 
@@ -157,55 +162,33 @@ mod requests {
     #[derive(Debug, Deserialize)]
     #[serde(tag = "type")]
     pub enum ApiRequest {
-        Add(TwoNumsRequest),
-        Sub(TwoNumsRequest),
-        SetVar(SetVarRequest),
-        GetVar(GetVarRequest),
+        ListRows(ListRowsRequest),
     }
 
     #[derive(Debug, Deserialize)]
-    pub struct TwoNumsRequest {
-        pub x: u8,
-        pub y: u8,
-        pub request_id: Box<str>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub struct SetVarRequest {
-        pub name: Box<str>,
-        pub value: Box<str>,
-        pub request_id: Box<str>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub struct GetVarRequest {
-        pub name: Box<str>,
+    pub struct ListRowsRequest {
+        pub table: Box<str>,
         pub request_id: Box<str>,
     }
 }
 
 mod responses {
+    use std::collections::HashMap;
+
     use serde::Serialize;
+
+    pub type Row = HashMap<Box<str>, serde_json::Value>;
 
     #[derive(Debug, Serialize)]
     #[serde(tag = "type")]
     pub enum ApiResponse {
-        Add(OpResult),
-        Sub(OpResult),
-        SetVar(VarResult),
-        GetVar(VarResult),
+        ListRows(ListRowsResponse),
     }
 
     #[derive(Debug, Serialize)]
-    pub struct OpResult {
-        pub result: u8,
-        pub request_id: Box<str>,
-    }
-
-    #[derive(Debug, Serialize)]
-    pub struct VarResult {
-        pub name: Box<str>,
-        pub value: Box<str>,
+    pub struct ListRowsResponse {
+        pub table: Box<str>,
+        pub rows: Vec<Row>,
         pub request_id: Box<str>,
     }
 
@@ -229,115 +212,193 @@ mod responses {
 }
 
 mod db {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use r2d2::Pool;
+    use r2d2_sqlite::{rusqlite, SqliteConnectionManager};
+    use rusqlite::types::ValueRef as SqlValue;
+    use serde_json::Value as JsonValue;
 
-    use serde::Serialize;
-    use thiserror::Error;
+    use crate::responses::Row;
+
+    pub struct TableName(Box<str>);
 
     pub trait Database: Clone + Send {
-        type Error: std::error::Error + Serialize;
+        type Error: std::error::Error;
 
-        fn set_var(
+        fn check_table_name(
             &self,
-            name: &str,
-            value: &str,
-        ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+            table_name: &str,
+        ) -> impl std::future::Future<Output = Result<Option<TableName>, Self::Error>> + Send;
 
-        fn get_var(
+        fn list_rows(
             &self,
-            name: &str,
-        ) -> impl std::future::Future<Output = Result<Box<str>, Self::Error>> + Send;
+            table_name: TableName,
+        ) -> impl std::future::Future<Output = Result<Vec<Row>, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
-    pub struct InMemory {
-        map: Arc<Mutex<HashMap<Box<str>, Box<str>>>>,
+    pub struct SqlxDatabase {
+        pool: Pool<SqliteConnectionManager>,
     }
 
-    impl InMemory {
-        pub fn new() -> Self {
-            Self {
-                map: Arc::new(Mutex::new(HashMap::new())),
+    impl SqlxDatabase {
+        pub async fn new(db: Box<str>) -> color_eyre::Result<Self> {
+            use color_eyre::{eyre, eyre::Context};
+
+            let manager = SqliteConnectionManager::file(db.as_ref());
+            let pool = Pool::new(manager).context("failed to create database connection pool")?;
+
+            {
+                let pool = pool.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = pool.get().context("failed to get a connection from pool")?;
+                    let count = conn
+                        .query_row(
+                            r#"
+                            SELECT count(*) as count
+                            FROM sqlite_master
+                            WHERE type = "table"
+                            "#,
+                            (),
+                            |r| r.get::<_, i32>(0),
+                        )
+                        .context("database connectio verification failed")?;
+
+                    tracing::info!("found {count} tables in {db}");
+
+                    eyre::Ok(())
+                })
+                .await
+                .context("failed to spawn a tokio task")??;
             }
+
+            Ok(Self { pool })
+        }
+
+        async fn get_tables(&self) -> Result<Vec<Box<str>>, rusqlite::Error> {
+            let pool = self.pool.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<Box<str>>, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let rows = conn
+                    .prepare(r#"SELECT name FROM sqlite_master WHERE type = "table""#)?
+                    .query_map((), |r| r.get::<_, Box<str>>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .expect("failed to spawn a tokio task")
         }
     }
 
-    #[derive(Debug, Error, Serialize)]
-    #[serde(tag = "type")]
-    pub enum InMemoryError {
-        #[error("failed to get database lock")]
-        FailedToGetLock,
-        #[error("no value found for {0:?}")]
-        NoValueFound(Value),
-    }
+    impl Database for SqlxDatabase {
+        type Error = rusqlite::Error;
 
-    #[derive(Debug, Serialize)]
-    pub struct Value {
-        name: Box<str>,
-    }
-
-    impl Database for InMemory {
-        type Error = InMemoryError;
-
-        async fn set_var(&self, name: &str, value: &str) -> Result<(), InMemoryError> {
-            self.map
-                .lock()
-                .map_err(|e| {
-                    tracing::error!("failed to acquire database lock for `set_var` operation: {e}");
-                    InMemoryError::FailedToGetLock
-                })?
-                .insert(name.into(), value.into());
-            Ok(())
+        async fn check_table_name(
+            &self,
+            table_name: &str,
+        ) -> Result<Option<TableName>, Self::Error> {
+            Ok(self
+                .get_tables()
+                .await?
+                .into_iter()
+                .find(|n| n.to_lowercase() == table_name.to_lowercase())
+                .map(TableName))
         }
 
-        async fn get_var(&self, name: &str) -> Result<Box<str>, InMemoryError> {
-            let value = self
-                .map
-                .lock()
-                .map_err(|e| {
-                    tracing::error!("failed to acquire database lock for `get_var` operation: {e}");
-                    InMemoryError::FailedToGetLock
-                })?
-                .get(name)
-                .ok_or(InMemoryError::NoValueFound(Value { name: name.into() }))?
-                .to_owned();
+        async fn list_rows(
+            &self,
+            TableName(table_name): TableName,
+        ) -> Result<Vec<Row>, Self::Error> {
+            let pool = self.pool.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<Row>, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
 
-            Ok(value)
+                let sql = format!("SELECT * FROM {table_name}");
+                let mut stmt = conn.prepare(&sql)?;
+
+                let column_names: Vec<Box<str>> =
+                    stmt.column_names().into_iter().map(Into::into).collect();
+
+                let rows = stmt
+                    .query_map((), |r| {
+                        Ok(column_names
+                            .clone()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, name)| {
+                                (
+                                    name,
+                                    rusqlite_value_to_json(
+                                        r.get_ref(i).expect("failed to get column value"),
+                                    ),
+                                )
+                            })
+                            .collect())
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(rows)
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
+    }
+
+    pub fn rusqlite_value_to_json(v: SqlValue) -> JsonValue {
+        match v {
+            SqlValue::Null => JsonValue::Null,
+            SqlValue::Integer(x) => serde_json::json!(x),
+            SqlValue::Real(x) => serde_json::json!(x),
+            SqlValue::Text(s) => JsonValue::String(String::from_utf8_lossy(s).into_owned()),
+            SqlValue::Blob(s) => serde_json::json!(s),
         }
     }
 }
 
-mod calculator {
+mod app {
     use std::task::{Context, Poll};
 
     use futures::future;
+    use serde::Serialize;
+    use thiserror::Error;
     use tower::Service;
 
     use crate::{
         db::Database,
-        requests::{ApiRequest, GetVarRequest, SetVarRequest, TwoNumsRequest},
-        responses::{ApiResponse, OpResult, VarResult},
+        requests::ApiRequest,
+        responses::{ApiResponse, ListRowsResponse},
     };
 
-    pub struct Calculator<DB: Database> {
+    pub struct App<DB: Database> {
         db: DB,
     }
 
-    impl<DB: Database> Calculator<DB> {
+    #[derive(Debug, Error, Serialize)]
+    #[serde(tag = "type")]
+    pub enum AppError<DBError: std::error::Error> {
+        #[error("database operation failed: {error}")]
+        DatabaseError {
+            #[from]
+            #[serde(skip)]
+            error: DBError,
+        },
+        #[error("database operation failed: {table}")]
+        TableNotFound { table: Box<str> },
+    }
+
+    impl<DB: Database> App<DB> {
         pub const fn new(db: DB) -> Self {
             Self { db }
         }
     }
 
-    impl<DB> Service<ApiRequest> for Calculator<DB>
+    impl<DB> Service<ApiRequest> for App<DB>
     where
         DB: Database + 'static,
+        AppError<DB::Error>: From<DB::Error>,
     {
         type Response = ApiResponse;
-        type Error = DB::Error;
+        type Error = AppError<DB::Error>;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -348,40 +409,23 @@ mod calculator {
             let db = self.db.clone();
 
             Box::pin(async move {
-                Ok(match request {
-                    ApiRequest::Add(TwoNumsRequest { x, y, request_id }) => {
-                        ApiResponse::Add(OpResult {
-                            result: x.wrapping_add(y),
-                            request_id,
+                let response = match request {
+                    ApiRequest::ListRows(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+                        let rows = db.list_rows(table_name).await?;
+                        ApiResponse::ListRows(ListRowsResponse {
+                            table: req.table,
+                            rows,
+                            request_id: req.request_id,
                         })
                     }
-                    ApiRequest::Sub(TwoNumsRequest { x, y, request_id }) => {
-                        ApiResponse::Sub(OpResult {
-                            result: x.wrapping_sub(y),
-                            request_id,
-                        })
-                    }
-                    ApiRequest::SetVar(SetVarRequest {
-                        name,
-                        value,
-                        request_id,
-                    }) => {
-                        db.set_var(&name, &value).await?;
-                        ApiResponse::SetVar(VarResult {
-                            name,
-                            value,
-                            request_id,
-                        })
-                    }
-                    ApiRequest::GetVar(GetVarRequest { name, request_id }) => {
-                        let value = db.get_var(&name).await?;
-                        ApiResponse::GetVar(VarResult {
-                            name,
-                            value,
-                            request_id,
-                        })
-                    }
-                })
+                };
+
+                Ok(response)
             })
         }
     }

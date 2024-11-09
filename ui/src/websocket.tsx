@@ -69,7 +69,7 @@ export default async function benchmark() {
   const start = performance.now();
 
   const promises = Array.from({ length: BENCHMARK_MESSAGES }, () =>
-    $fetch({ type: "Add", x: 10, y: 10, request_id: nanoid() }),
+    $fetch({ type: "ListRows", table: "employees", request_id: nanoid() }),
   );
   await Promise.all(promises);
 
