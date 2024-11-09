@@ -6,7 +6,7 @@ let sockets: WebSocket[] = [];
 let connectionIndex = 0;
 
 const CONNECTION_COUNT: number = 1;
-const BENCHMARK_MESSAGES: number = 100;
+const BENCHMARK_MESSAGES: number = 10;
 
 function initWebSocketPool(): void {
   sockets = Array.from({ length: CONNECTION_COUNT }, () => {

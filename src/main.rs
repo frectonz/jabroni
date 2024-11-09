@@ -1,14 +1,17 @@
+use std::{sync::Arc, time::Duration};
+
 use calculator::Calculator;
 use clap::Parser;
 use db::InMemory;
 use futures::{future::poll_fn, SinkExt, StreamExt};
+use responses::ErrorResponse;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::{mpsc, Mutex},
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tower::{Service, ServiceBuilder};
+use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
 
 #[derive(Debug, Parser)]
@@ -93,39 +96,58 @@ async fn accept_connection(stream: TcpStream) {
         }
     });
 
-    let svc = Box::new(
-        ServiceBuilder::new()
-            .layer(WebSocketAdapterLayer)
-            .service(Calculator::new(InMemory::new())),
-    );
+    let svc = ServiceBuilder::new()
+        .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
+        .layer(WebSocketAdapterLayer)
+        .service(Calculator::new(InMemory::new()));
+
+    let svc = Arc::new(Mutex::new(svc));
 
     while let Some(result) = ws_rx.next().await {
-        let msg = match result {
-            Ok(msg) => msg,
+        let tx = tx.clone();
+
+        let request = match result {
+            Ok(WsMessage::Text(body)) => body,
+            Ok(WsMessage::Close(_)) => {
+                tracing::warn!("connection is closed");
+                break;
+            }
+            Ok(_) => {
+                tracing::warn!("received unsupported websocket message type");
+
+                let error = ErrorResponse::NonTextMessage;
+                let msg = WsMessage::text(
+                    serde_json::to_string(&error)
+                        .expect("failed to serialize error response to json"),
+                );
+
+                tx.send(msg)
+                    .map_err(|e| tracing::error!("failed to send message to client: {e}"))
+                    .unwrap_or_default();
+                break;
+            }
             Err(err) => {
                 tracing::error!("failed to recieve mesage: {err}");
                 break;
             }
         };
 
-        let tx = tx.clone();
-        let mut svc = svc.clone();
-        tokio::spawn(async move {
-            poll_fn(|ctx| svc.poll_ready(ctx))
-                .await
-                .unwrap_or_else(|()| tracing::error!("service failed to become ready"));
+        let mut locked = svc.lock().await;
+        poll_fn(move |ctx| locked.poll_ready(ctx))
+            .await
+            .unwrap_or_else(|e| tracing::error!("service failed to become ready: {e}"));
 
-            match svc.call(msg).await {
-                Ok(msg) => {
-                    tx.send(msg)
-                        .map_err(|e| tracing::error!("failed to send message to client: {e}"))
-                        .unwrap_or_default();
-                }
-                Err(()) => {
-                    tracing::warn!("connection is closed");
-                }
-            };
-        });
+        let mut locked = svc.lock().await;
+        match locked.call(request).await {
+            Ok(msg) => {
+                tx.send(msg)
+                    .map_err(|e| tracing::error!("failed to send message to client: {e}"))
+                    .unwrap_or_default();
+            }
+            Err(err) => {
+                tracing::error!("failed to process message: {err}")
+            }
+        };
     }
 }
 
@@ -300,7 +322,6 @@ mod calculator {
         responses::{ApiResponse, OpResult, VarResult},
     };
 
-    #[derive(Clone)]
     pub struct Calculator<DB: Database> {
         db: DB,
     }
@@ -378,7 +399,6 @@ mod websocket {
 
     use crate::{requests::ApiRequest, responses::ErrorResponse, WsMessage};
 
-    #[derive(Clone)]
     pub struct WebSocketAdapter<S> {
         inner: S,
     }
@@ -389,40 +409,23 @@ mod websocket {
         }
     }
 
-    impl<S> Service<WsMessage> for WebSocketAdapter<S>
+    impl<S> Service<String> for WebSocketAdapter<S>
     where
-        S: Service<ApiRequest> + Clone,
+        S: Service<ApiRequest>,
         S::Response: Serialize,
         S::Future: Send + 'static,
-        S::Error: Error + Serialize,
+        S::Error: Error + Serialize + Send + 'static,
     {
         type Response = WsMessage;
-        type Error = ();
+        type Error = S::Error;
         type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
+        fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.inner.poll_ready(ctx)
         }
 
-        fn call(&mut self, request: WsMessage) -> Self::Future {
-            let body = match request {
-                WsMessage::Text(body) => body,
-                WsMessage::Close(_) => {
-                    return future::ready(Err(())).boxed();
-                }
-                _ => {
-                    tracing::warn!("received unsupported websocket message type");
-
-                    let error = ErrorResponse::NonTextMessage;
-                    let message = WsMessage::text(
-                        serde_json::to_string(&error)
-                            .expect("failed to serialize error response to json"),
-                    );
-                    return future::ok(message).boxed();
-                }
-            };
-
-            let req = serde_json::from_str::<ApiRequest>(&body);
+        fn call(&mut self, request: String) -> Self::Future {
+            let req = serde_json::from_str::<ApiRequest>(&request);
 
             match req {
                 Ok(req) => self
