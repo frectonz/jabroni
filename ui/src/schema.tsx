@@ -10,6 +10,12 @@ const ListRowsRequest = z.object({
       order: z.enum(["Asc", "Desc"]),
     })
     .optional(),
+  page: z
+    .object({
+      number: z.number(),
+      size: z.number(),
+    })
+    .optional(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -52,4 +58,5 @@ export const ErrorResponse = z.discriminatedUnion("type", [
     type: z.literal("SortColumnNotFound"),
     ...SortColumnNotFound.shape,
   }),
+  z.object({ type: z.literal("PageNumberCanNotBeZero") })
 ]);

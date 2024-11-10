@@ -23,7 +23,24 @@ function App() {
 
     const sort = sortColumn === "" ? undefined : { column: sortColumn, order };
 
-    const req = ApiRequest.parse({ type: "ListRows", table, select, sort });
+    const pageNumber = data.get("page_number")!;
+    const pageSize = data.get("page_size")!;
+
+    const page =
+      pageNumber === "" || pageSize === ""
+        ? undefined
+        : {
+            number: parseInt(pageNumber.toString()),
+            size: parseInt(pageSize.toString()),
+          };
+
+    const req = ApiRequest.parse({
+      type: "ListRows",
+      table,
+      select,
+      sort,
+      page,
+    });
     mutate(req);
   }
 
@@ -56,7 +73,14 @@ function App() {
             <br />
             <input type="radio" id="order" name="order" value="Desc" />
             <label htmlFor="order">Desc</label>
+          </div>
+
+          <div>
+            <label htmlFor="page_number">Page Number</label>
+            <input type="number" id="page_number" name="page_number" />
             <br />
+            <label htmlFor="page_size">Page Size</label>
+            <input type="number" id="page_size" name="page_size" />
           </div>
 
           <input type="submit" value="Submit" />

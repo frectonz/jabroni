@@ -177,6 +177,7 @@ mod requests {
         pub table: BoxStr,
         pub select: BoxList<BoxStr>,
         pub sort: Option<SortInfo>,
+        pub page: Option<Pagination>,
         pub request_id: BoxStr,
     }
 
@@ -199,6 +200,12 @@ mod requests {
                 SortOrder::Desc => write!(f, "DESC"),
             }
         }
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct Pagination {
+        pub number: u32,
+        pub size: u32,
     }
 }
 
@@ -249,7 +256,11 @@ mod db {
     use rusqlite::types::ValueRef as SqlValue;
     use serde_json::Value as JsonValue;
 
-    use crate::{requests::SortOrder, responses::Row, BoxList, BoxStr};
+    use crate::{
+        requests::{Pagination, SortOrder},
+        responses::Row,
+        BoxList, BoxStr,
+    };
 
     pub struct TableName(BoxStr);
     pub struct ColumnName(BoxStr);
@@ -280,6 +291,7 @@ mod db {
             table_name: TableName,
             column_names: Columns,
             sort_info: Option<(ColumnName, SortOrder)>,
+            page: Option<Pagination>,
         ) -> impl std::future::Future<Output = Result<BoxList<Row>, Self::Error>> + Send;
     }
 
@@ -429,6 +441,7 @@ mod db {
             TableName(table_name): TableName,
             column_names: Columns,
             sort_info: Option<(ColumnName, SortOrder)>,
+            page: Option<Pagination>,
         ) -> Result<BoxList<Row>, Self::Error> {
             let pool = self.pool.clone();
             tokio::task::spawn_blocking(move || -> Result<BoxList<Row>, rusqlite::Error> {
@@ -448,7 +461,14 @@ mod db {
                     .map(|(ColumnName(col), sort_order)| format!("ORDER BY {col} {sort_order}"))
                     .unwrap_or_default();
 
-                let sql = format!("SELECT {selects} FROM {table_name} {sort}");
+                let limit = page
+                    .map(|Pagination { number, size }| {
+                        let offset = (number - 1) * size;
+                        format!("LIMIT {size} OFFSET {offset}")
+                    })
+                    .unwrap_or_default();
+
+                let sql = format!("SELECT {selects} FROM {table_name} {sort} {limit}");
                 let mut stmt = conn.prepare(&sql)?;
 
                 let column_names: BoxList<BoxStr> =
@@ -523,6 +543,8 @@ mod app {
         ColumnsNotFound { columns: Vec<BoxStr> },
         #[error("sort column not found: {column}")]
         SortColumnNotFound { column: BoxStr },
+        #[error("pagination is one based")]
+        PageNumberCanNotBeZero,
     }
 
     impl<DB: Database> App<DB> {
@@ -577,7 +599,13 @@ mod app {
                             None
                         };
 
-                        let rows = db.list_rows(table_name, found_columns, sort_info).await?;
+                        if let Some(0) = req.page.as_ref().map(|p| p.number) {
+                            return Err(Self::Error::PageNumberCanNotBeZero);
+                        }
+
+                        let rows = db
+                            .list_rows(table_name, found_columns, sort_info, req.page)
+                            .await?;
                         ApiResponse::ListRows(ListRowsResponse {
                             table: req.table,
                             rows,
