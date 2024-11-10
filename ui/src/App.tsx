@@ -14,10 +14,14 @@ function App() {
     const data = new FormData(e.target as HTMLFormElement);
 
     const table = data.get("table");
+
     const selectStr = data.get("select")!.toString();
     const select = selectStr === "" ? [] : selectStr.split(",");
 
-    const req = ApiRequest.parse({ type: "ListRows", table, select });
+    const sortStr = data.get("sort")!.toString();
+    const sort = sortStr === "" ? undefined : sortStr;
+
+    const req = ApiRequest.parse({ type: "ListRows", table, select, sort });
     mutate(req);
   }
 
@@ -37,6 +41,11 @@ function App() {
           <div>
             <label htmlFor="select">Select</label>
             <input type="text" id="select" name="select" />
+          </div>
+
+          <div>
+            <label htmlFor="sort">Sort</label>
+            <input type="text" id="sort" name="sort" />
           </div>
 
           <input type="submit" value="Submit" />

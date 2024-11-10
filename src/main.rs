@@ -174,6 +174,7 @@ mod requests {
     pub struct ListRowsRequest {
         pub table: BoxStr,
         pub select: BoxList<BoxStr>,
+        pub sort: Option<BoxStr>,
         pub request_id: BoxStr,
     }
 }
@@ -245,10 +246,17 @@ mod db {
             column_names: &[BoxStr],
         ) -> impl std::future::Future<Output = Result<(Columns, Vec<BoxStr>), Self::Error>> + Send;
 
+        fn check_column_name(
+            &self,
+            table_name: &TableName,
+            column_name: &str,
+        ) -> impl std::future::Future<Output = Result<Option<ColumnName>, Self::Error>> + Send;
+
         fn list_rows(
             &self,
             table_name: TableName,
             column_names: Columns,
+            sort_column: Option<ColumnName>,
         ) -> impl std::future::Future<Output = Result<BoxList<Row>, Self::Error>> + Send;
     }
 
@@ -378,10 +386,26 @@ mod db {
             ))
         }
 
+        async fn check_column_name(
+            &self,
+            table_name: &TableName,
+            column_name: &str,
+        ) -> Result<Option<ColumnName>, Self::Error> {
+            let column_name = column_name.to_lowercase();
+            for column in self.get_columns(&table_name).await? {
+                if column.to_lowercase() == column_name {
+                    return Ok(Some(ColumnName(column)));
+                }
+            }
+
+            Ok(None)
+        }
+
         async fn list_rows(
             &self,
             TableName(table_name): TableName,
             column_names: Columns,
+            sort_column: Option<ColumnName>,
         ) -> Result<BoxList<Row>, Self::Error> {
             let pool = self.pool.clone();
             tokio::task::spawn_blocking(move || -> Result<BoxList<Row>, rusqlite::Error> {
@@ -397,7 +421,11 @@ mod db {
                         .join(",")
                 };
 
-                let sql = format!("SELECT {selects} FROM {table_name}");
+                let sort = sort_column
+                    .map(|ColumnName(col)| format!("ORDER BY {col}"))
+                    .unwrap_or_default();
+
+                let sql = format!("SELECT {selects} FROM {table_name} {sort}");
                 let mut stmt = conn.prepare(&sql)?;
 
                 let column_names: BoxList<BoxStr> =
@@ -470,6 +498,8 @@ mod app {
         TableNotFound { table: BoxStr },
         #[error("column not found: {columns:?}")]
         ColumnsNotFound { columns: Vec<BoxStr> },
+        #[error("sort column not found: {column}")]
+        SortColumnNotFound { column: BoxStr },
     }
 
     impl<DB: Database> App<DB> {
@@ -512,7 +542,17 @@ mod app {
                             });
                         }
 
-                        let rows = db.list_rows(table_name, found_columns).await?;
+                        let sort_column = if let Some(sort) = req.sort {
+                            let col = db
+                                .check_column_name(&table_name, &sort)
+                                .await?
+                                .ok_or(Self::Error::SortColumnNotFound { column: sort })?;
+                            Some(col)
+                        } else {
+                            None
+                        };
+
+                        let rows = db.list_rows(table_name, found_columns, sort_column).await?;
                         ApiResponse::ListRows(ListRowsResponse {
                             table: req.table,
                             rows,
