@@ -14,16 +14,18 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
 
+type BoxStr = Box<str>;
+
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
     /// Path to the sqlite database file.
     #[arg(env)]
-    database: Box<str>,
+    database: BoxStr,
 
     /// The address to bind to.
     #[arg(short, long, env, default_value = "127.0.0.1:3030")]
-    address: Box<str>,
+    address: BoxStr,
 }
 
 #[tokio::main]
@@ -159,6 +161,8 @@ async fn accept_connection(stream: TcpStream, db: SqlxDatabase) {
 mod requests {
     use serde::Deserialize;
 
+    use crate::BoxStr;
+
     #[derive(Debug, Deserialize)]
     #[serde(tag = "type")]
     pub enum ApiRequest {
@@ -167,9 +171,9 @@ mod requests {
 
     #[derive(Debug, Deserialize)]
     pub struct ListRowsRequest {
-        pub table: Box<str>,
-        pub select: Vec<Box<str>>,
-        pub request_id: Box<str>,
+        pub table: BoxStr,
+        pub select: Vec<BoxStr>,
+        pub request_id: BoxStr,
     }
 }
 
@@ -178,7 +182,9 @@ mod responses {
 
     use serde::Serialize;
 
-    pub type Row = HashMap<Box<str>, serde_json::Value>;
+    use crate::BoxStr;
+
+    pub type Row = HashMap<BoxStr, serde_json::Value>;
 
     #[derive(Debug, Serialize)]
     #[serde(tag = "type")]
@@ -188,9 +194,9 @@ mod responses {
 
     #[derive(Debug, Serialize)]
     pub struct ListRowsResponse {
-        pub table: Box<str>,
+        pub table: BoxStr,
         pub rows: Vec<Row>,
-        pub request_id: Box<str>,
+        pub request_id: BoxStr,
     }
 
     #[derive(Debug, Serialize)]
@@ -202,11 +208,11 @@ mod responses {
 
     #[derive(Debug, Serialize)]
     pub struct ErrorMessage {
-        message: Box<str>,
+        message: BoxStr,
     }
 
     impl ErrorResponse {
-        pub const fn bad_request(message: Box<str>) -> Self {
+        pub const fn bad_request(message: BoxStr) -> Self {
             Self::BadRequest(ErrorMessage { message })
         }
     }
@@ -218,10 +224,10 @@ mod db {
     use rusqlite::types::ValueRef as SqlValue;
     use serde_json::Value as JsonValue;
 
-    use crate::responses::Row;
+    use crate::{responses::Row, BoxStr};
 
-    pub struct TableName(Box<str>);
-    pub struct ColumnName(Box<str>);
+    pub struct TableName(BoxStr);
+    pub struct ColumnName(BoxStr);
 
     pub trait Database: Clone + Send {
         type Error: std::error::Error;
@@ -234,9 +240,8 @@ mod db {
         fn check_column_names(
             &self,
             table_name: &TableName,
-            column_names: &[Box<str>],
-        ) -> impl std::future::Future<Output = Result<(Vec<ColumnName>, Vec<Box<str>>), Self::Error>>
-               + Send;
+            column_names: &[BoxStr],
+        ) -> impl std::future::Future<Output = Result<(Vec<ColumnName>, Vec<BoxStr>), Self::Error>> + Send;
 
         fn list_rows(
             &self,
@@ -251,7 +256,7 @@ mod db {
     }
 
     impl SqlxDatabase {
-        pub async fn new(db: Box<str>) -> color_eyre::Result<Self> {
+        pub async fn new(db: BoxStr) -> color_eyre::Result<Self> {
             use color_eyre::{eyre, eyre::Context};
 
             let manager = SqliteConnectionManager::file(db.as_ref());
@@ -284,14 +289,14 @@ mod db {
             Ok(Self { pool })
         }
 
-        async fn get_tables(&self) -> Result<Vec<Box<str>>, rusqlite::Error> {
+        async fn get_tables(&self) -> Result<Vec<BoxStr>, rusqlite::Error> {
             let pool = self.pool.clone();
-            tokio::task::spawn_blocking(move || -> Result<Vec<Box<str>>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<Vec<BoxStr>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let rows = conn
                     .prepare(r#"SELECT name FROM sqlite_master WHERE type = "table""#)?
-                    .query_map((), |r| r.get::<_, Box<str>>(0))?
+                    .query_map((), |r| r.get::<_, BoxStr>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
@@ -302,11 +307,11 @@ mod db {
         async fn get_columns(
             &self,
             TableName(table_name): &TableName,
-        ) -> Result<Vec<Box<str>>, rusqlite::Error> {
+        ) -> Result<Vec<BoxStr>, rusqlite::Error> {
             let pool = self.pool.clone();
             let sql = format!(r#"SELECT * FROM {table_name}"#);
 
-            tokio::task::spawn_blocking(move || -> Result<Vec<Box<str>>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<Vec<BoxStr>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let columns = conn
@@ -341,11 +346,11 @@ mod db {
         async fn check_column_names(
             &self,
             table_name: &TableName,
-            column_names: &[Box<str>],
-        ) -> Result<(Vec<ColumnName>, Vec<Box<str>>), Self::Error> {
+            column_names: &[BoxStr],
+        ) -> Result<(Vec<ColumnName>, Vec<BoxStr>), Self::Error> {
             let all_columns = self.get_columns(table_name).await?;
 
-            Ok(column_names.into_iter().fold(
+            Ok(column_names.iter().fold(
                 (
                     Vec::with_capacity(column_names.len()),
                     Vec::with_capacity(column_names.len()),
@@ -391,7 +396,7 @@ mod db {
                 let sql = format!("SELECT {selects} FROM {table_name}");
                 let mut stmt = conn.prepare(&sql)?;
 
-                let column_names: Vec<Box<str>> =
+                let column_names: Vec<BoxStr> =
                     stmt.column_names().into_iter().map(Into::into).collect();
 
                 let rows = stmt
@@ -442,6 +447,7 @@ mod app {
         db::Database,
         requests::ApiRequest,
         responses::{ApiResponse, ListRowsResponse},
+        BoxStr,
     };
 
     pub struct App<DB: Database> {
@@ -458,9 +464,9 @@ mod app {
             error: DBError,
         },
         #[error("table not found: {table}")]
-        TableNotFound { table: Box<str> },
+        TableNotFound { table: BoxStr },
         #[error("column not found: {columns:?}")]
-        ColumnsNotFound { columns: Vec<Box<str>> },
+        ColumnsNotFound { columns: Vec<BoxStr> },
     }
 
     impl<DB: Database> App<DB> {
