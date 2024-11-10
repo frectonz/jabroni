@@ -15,6 +15,7 @@ use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
 use websocket::WebSocketAdapterLayer;
 
 type BoxStr = Box<str>;
+type BoxList<T> = Box<[T]>;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -161,7 +162,7 @@ async fn accept_connection(stream: TcpStream, db: SqlxDatabase) {
 mod requests {
     use serde::Deserialize;
 
-    use crate::BoxStr;
+    use crate::{BoxList, BoxStr};
 
     #[derive(Debug, Deserialize)]
     #[serde(tag = "type")]
@@ -172,7 +173,7 @@ mod requests {
     #[derive(Debug, Deserialize)]
     pub struct ListRowsRequest {
         pub table: BoxStr,
-        pub select: Vec<BoxStr>,
+        pub select: BoxList<BoxStr>,
         pub request_id: BoxStr,
     }
 }
@@ -182,7 +183,7 @@ mod responses {
 
     use serde::Serialize;
 
-    use crate::BoxStr;
+    use crate::{BoxList, BoxStr};
 
     pub type Row = HashMap<BoxStr, serde_json::Value>;
 
@@ -195,7 +196,7 @@ mod responses {
     #[derive(Debug, Serialize)]
     pub struct ListRowsResponse {
         pub table: BoxStr,
-        pub rows: Vec<Row>,
+        pub rows: BoxList<Row>,
         pub request_id: BoxStr,
     }
 
@@ -224,10 +225,11 @@ mod db {
     use rusqlite::types::ValueRef as SqlValue;
     use serde_json::Value as JsonValue;
 
-    use crate::{responses::Row, BoxStr};
+    use crate::{responses::Row, BoxList, BoxStr};
 
     pub struct TableName(BoxStr);
     pub struct ColumnName(BoxStr);
+    pub type Columns = Vec<ColumnName>;
 
     pub trait Database: Clone + Send {
         type Error: std::error::Error;
@@ -241,13 +243,13 @@ mod db {
             &self,
             table_name: &TableName,
             column_names: &[BoxStr],
-        ) -> impl std::future::Future<Output = Result<(Vec<ColumnName>, Vec<BoxStr>), Self::Error>> + Send;
+        ) -> impl std::future::Future<Output = Result<(Columns, Vec<BoxStr>), Self::Error>> + Send;
 
         fn list_rows(
             &self,
             table_name: TableName,
-            column_names: Vec<ColumnName>,
-        ) -> impl std::future::Future<Output = Result<Vec<Row>, Self::Error>> + Send;
+            column_names: Columns,
+        ) -> impl std::future::Future<Output = Result<BoxList<Row>, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
@@ -289,15 +291,15 @@ mod db {
             Ok(Self { pool })
         }
 
-        async fn get_tables(&self) -> Result<Vec<BoxStr>, rusqlite::Error> {
+        async fn get_tables(&self) -> Result<BoxList<BoxStr>, rusqlite::Error> {
             let pool = self.pool.clone();
-            tokio::task::spawn_blocking(move || -> Result<Vec<BoxStr>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<BoxList<BoxStr>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let rows = conn
                     .prepare(r#"SELECT name FROM sqlite_master WHERE type = "table""#)?
                     .query_map((), |r| r.get::<_, BoxStr>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<BoxList<_>, _>>()?;
                 Ok(rows)
             })
             .await
@@ -307,11 +309,11 @@ mod db {
         async fn get_columns(
             &self,
             TableName(table_name): &TableName,
-        ) -> Result<Vec<BoxStr>, rusqlite::Error> {
+        ) -> Result<BoxList<BoxStr>, rusqlite::Error> {
             let pool = self.pool.clone();
             let sql = format!(r#"SELECT * FROM {table_name}"#);
 
-            tokio::task::spawn_blocking(move || -> Result<Vec<BoxStr>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<BoxList<BoxStr>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let columns = conn
@@ -335,19 +337,21 @@ mod db {
             &self,
             table_name: &str,
         ) -> Result<Option<TableName>, Self::Error> {
-            Ok(self
-                .get_tables()
-                .await?
-                .into_iter()
-                .find(|n| n.to_lowercase() == table_name.to_lowercase())
-                .map(TableName))
+            let table_name = table_name.to_lowercase();
+            for table in self.get_tables().await? {
+                if table.to_lowercase() == table_name {
+                    return Ok(Some(TableName(table)));
+                }
+            }
+
+            Ok(None)
         }
 
         async fn check_column_names(
             &self,
             table_name: &TableName,
             column_names: &[BoxStr],
-        ) -> Result<(Vec<ColumnName>, Vec<BoxStr>), Self::Error> {
+        ) -> Result<(Columns, Vec<BoxStr>), Self::Error> {
             let all_columns = self.get_columns(table_name).await?;
 
             Ok(column_names.iter().fold(
@@ -377,10 +381,10 @@ mod db {
         async fn list_rows(
             &self,
             TableName(table_name): TableName,
-            column_names: Vec<ColumnName>,
-        ) -> Result<Vec<Row>, Self::Error> {
+            column_names: Columns,
+        ) -> Result<BoxList<Row>, Self::Error> {
             let pool = self.pool.clone();
-            tokio::task::spawn_blocking(move || -> Result<Vec<Row>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<BoxList<Row>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let selects = if column_names.is_empty() {
@@ -389,25 +393,24 @@ mod db {
                     column_names
                         .into_iter()
                         .map(|c| c.0)
-                        .collect::<Vec<_>>()
+                        .collect::<BoxList<_>>()
                         .join(",")
                 };
 
                 let sql = format!("SELECT {selects} FROM {table_name}");
                 let mut stmt = conn.prepare(&sql)?;
 
-                let column_names: Vec<BoxStr> =
+                let column_names: BoxList<BoxStr> =
                     stmt.column_names().into_iter().map(Into::into).collect();
 
                 let rows = stmt
                     .query_map((), |r| {
                         Ok(column_names
-                            .clone()
-                            .into_iter()
+                            .iter()
                             .enumerate()
                             .map(|(i, name)| {
                                 (
-                                    name,
+                                    name.clone(),
                                     rusqlite_value_to_json(
                                         r.get_ref(i).expect("failed to get column value"),
                                     ),
@@ -415,7 +418,7 @@ mod db {
                             })
                             .collect())
                     })?
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<BoxList<_>, _>>()?;
 
                 Ok(rows)
             })
@@ -500,9 +503,8 @@ mod app {
                             },
                         )?;
 
-                        let (found_columns, not_found_columns) = db
-                            .check_column_names(&table_name, req.select.as_slice())
-                            .await?;
+                        let (found_columns, not_found_columns) =
+                            db.check_column_names(&table_name, &req.select).await?;
 
                         if !not_found_columns.is_empty() {
                             return Err(Self::Error::ColumnsNotFound {
