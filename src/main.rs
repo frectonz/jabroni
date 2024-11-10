@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use app::App;
 use clap::Parser;
-use db::SqlxDatabase;
+use db::SqliteDatabase;
 use futures::{future::poll_fn, SinkExt, StreamExt};
 use responses::ErrorResponse;
 use tokio::{
@@ -41,7 +41,7 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let args = Args::parse();
-    let db = SqlxDatabase::new(args.database).await?;
+    let db = SqliteDatabase::new(args.database).await?;
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -55,7 +55,7 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-async fn start(address: &str, db: SqlxDatabase) -> color_eyre::Result<()> {
+async fn start(address: &str, db: SqliteDatabase) -> color_eyre::Result<()> {
     use color_eyre::eyre::Context;
 
     let listener = TcpListener::bind(address)
@@ -79,7 +79,7 @@ async fn start(address: &str, db: SqlxDatabase) -> color_eyre::Result<()> {
     }
 }
 
-async fn accept_connection(stream: TcpStream, db: SqlxDatabase) {
+async fn accept_connection(stream: TcpStream, db: SqliteDatabase) {
     tracing::info!("accepted connection");
 
     let (mut ws_tx, mut ws_rx) = match tokio_tungstenite::accept_async(stream).await {
@@ -296,11 +296,11 @@ mod db {
     }
 
     #[derive(Clone)]
-    pub struct SqlxDatabase {
+    pub struct SqliteDatabase {
         pool: Pool<SqliteConnectionManager>,
     }
 
-    impl SqlxDatabase {
+    impl SqliteDatabase {
         pub async fn new(db: BoxStr) -> color_eyre::Result<Self> {
             use color_eyre::{eyre, eyre::Context};
 
@@ -373,7 +373,7 @@ mod db {
         }
     }
 
-    impl Database for SqlxDatabase {
+    impl Database for SqliteDatabase {
         type Error = rusqlite::Error;
 
         async fn check_table_name(
