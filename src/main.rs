@@ -160,6 +160,8 @@ async fn accept_connection(stream: TcpStream, db: SqlxDatabase) {
 }
 
 mod requests {
+    use std::fmt::Display;
+
     use serde::Deserialize;
 
     use crate::{BoxList, BoxStr};
@@ -174,8 +176,29 @@ mod requests {
     pub struct ListRowsRequest {
         pub table: BoxStr,
         pub select: BoxList<BoxStr>,
-        pub sort: Option<BoxStr>,
+        pub sort: Option<SortInfo>,
         pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct SortInfo {
+        pub column: BoxStr,
+        pub order: SortOrder,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub enum SortOrder {
+        Asc,
+        Desc,
+    }
+
+    impl Display for SortOrder {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                SortOrder::Asc => write!(f, "ASC"),
+                SortOrder::Desc => write!(f, "DESC"),
+            }
+        }
     }
 }
 
@@ -226,7 +249,7 @@ mod db {
     use rusqlite::types::ValueRef as SqlValue;
     use serde_json::Value as JsonValue;
 
-    use crate::{responses::Row, BoxList, BoxStr};
+    use crate::{requests::SortOrder, responses::Row, BoxList, BoxStr};
 
     pub struct TableName(BoxStr);
     pub struct ColumnName(BoxStr);
@@ -256,7 +279,7 @@ mod db {
             &self,
             table_name: TableName,
             column_names: Columns,
-            sort_column: Option<ColumnName>,
+            sort_info: Option<(ColumnName, SortOrder)>,
         ) -> impl std::future::Future<Output = Result<BoxList<Row>, Self::Error>> + Send;
     }
 
@@ -392,7 +415,7 @@ mod db {
             column_name: &str,
         ) -> Result<Option<ColumnName>, Self::Error> {
             let column_name = column_name.to_lowercase();
-            for column in self.get_columns(&table_name).await? {
+            for column in self.get_columns(table_name).await? {
                 if column.to_lowercase() == column_name {
                     return Ok(Some(ColumnName(column)));
                 }
@@ -405,7 +428,7 @@ mod db {
             &self,
             TableName(table_name): TableName,
             column_names: Columns,
-            sort_column: Option<ColumnName>,
+            sort_info: Option<(ColumnName, SortOrder)>,
         ) -> Result<BoxList<Row>, Self::Error> {
             let pool = self.pool.clone();
             tokio::task::spawn_blocking(move || -> Result<BoxList<Row>, rusqlite::Error> {
@@ -421,8 +444,8 @@ mod db {
                         .join(",")
                 };
 
-                let sort = sort_column
-                    .map(|ColumnName(col)| format!("ORDER BY {col}"))
+                let sort = sort_info
+                    .map(|(ColumnName(col), sort_order)| format!("ORDER BY {col} {sort_order}"))
                     .unwrap_or_default();
 
                 let sql = format!("SELECT {selects} FROM {table_name} {sort}");
@@ -542,17 +565,19 @@ mod app {
                             });
                         }
 
-                        let sort_column = if let Some(sort) = req.sort {
+                        let sort_info = if let Some(sort) = req.sort {
                             let col = db
-                                .check_column_name(&table_name, &sort)
+                                .check_column_name(&table_name, &sort.column)
                                 .await?
-                                .ok_or(Self::Error::SortColumnNotFound { column: sort })?;
-                            Some(col)
+                                .ok_or(Self::Error::SortColumnNotFound {
+                                    column: sort.column,
+                                })?;
+                            Some((col, sort.order))
                         } else {
                             None
                         };
 
-                        let rows = db.list_rows(table_name, found_columns, sort_column).await?;
+                        let rows = db.list_rows(table_name, found_columns, sort_info).await?;
                         ApiResponse::ListRows(ListRowsResponse {
                             table: req.table,
                             rows,

@@ -4,7 +4,12 @@ import { nanoid } from "nanoid";
 const ListRowsRequest = z.object({
   table: z.string(),
   select: z.array(z.string()).default([]),
-  sort: z.string().optional(),
+  sort: z
+    .object({
+      column: z.string(),
+      order: z.enum(["Asc", "Desc"]),
+    })
+    .optional(),
   request_id: z.string().default(() => nanoid()),
 });
 

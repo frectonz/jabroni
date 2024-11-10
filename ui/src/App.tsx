@@ -18,8 +18,10 @@ function App() {
     const selectStr = data.get("select")!.toString();
     const select = selectStr === "" ? [] : selectStr.split(",");
 
-    const sortStr = data.get("sort")!.toString();
-    const sort = sortStr === "" ? undefined : sortStr;
+    const order = data.get("order");
+    const sortColumn = data.get("sort");
+
+    const sort = sortColumn === "" ? undefined : { column: sortColumn, order };
 
     const req = ApiRequest.parse({ type: "ListRows", table, select, sort });
     mutate(req);
@@ -46,6 +48,15 @@ function App() {
           <div>
             <label htmlFor="sort">Sort</label>
             <input type="text" id="sort" name="sort" />
+          </div>
+
+          <div>
+            <input checked type="radio" id="order" name="order" value="Asc" />
+            <label htmlFor="order">Asc</label>
+            <br />
+            <input type="radio" id="order" name="order" value="Desc" />
+            <label htmlFor="order">Desc</label>
+            <br />
           </div>
 
           <input type="submit" value="Submit" />
