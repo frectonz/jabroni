@@ -19,8 +19,15 @@ const ListRowsRequest = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const GetRowRequest = z.object({
+  table: z.string(),
+  key: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsRequest.shape }),
+  z.object({ type: z.literal("GetRow"), ...GetRowRequest.shape }),
 ]);
 
 const ListRowsResponse = z.object({
@@ -29,8 +36,15 @@ const ListRowsResponse = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const GetRowResponse = z.object({
+  table: z.string(),
+  row: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsResponse.shape }),
+  z.object({ type: z.literal("GetRow"), ...GetRowResponse.shape }),
 ]);
 
 const ErrorMessage = z.object({
@@ -58,5 +72,6 @@ export const ErrorResponse = z.discriminatedUnion("type", [
     type: z.literal("SortColumnNotFound"),
     ...SortColumnNotFound.shape,
   }),
-  z.object({ type: z.literal("PageNumberCanNotBeZero") })
+  z.object({ type: z.literal("PageNumberCanNotBeZero") }),
+  z.object({ type: z.literal("RowNotFound") }),
 ]);

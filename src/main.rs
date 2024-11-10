@@ -163,6 +163,7 @@ mod requests {
     use std::fmt::Display;
 
     use serde::Deserialize;
+    use serde_json::Value as JsonValue;
 
     use crate::{BoxList, BoxStr};
 
@@ -170,6 +171,7 @@ mod requests {
     #[serde(tag = "type")]
     pub enum ApiRequest {
         ListRows(ListRowsRequest),
+        GetRow(GetRowRequest),
     }
 
     #[derive(Debug, Deserialize)]
@@ -207,6 +209,13 @@ mod requests {
         pub number: u32,
         pub size: u32,
     }
+
+    #[derive(Debug, Deserialize)]
+    pub struct GetRowRequest {
+        pub table: BoxStr,
+        pub key: JsonValue,
+        pub request_id: BoxStr,
+    }
 }
 
 mod responses {
@@ -222,12 +231,20 @@ mod responses {
     #[serde(tag = "type")]
     pub enum ApiResponse {
         ListRows(ListRowsResponse),
+        GetRow(GetRowResponse),
     }
 
     #[derive(Debug, Serialize)]
     pub struct ListRowsResponse {
         pub table: BoxStr,
         pub rows: BoxList<Row>,
+        pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct GetRowResponse {
+        pub table: BoxStr,
+        pub row: Row,
         pub request_id: BoxStr,
     }
 
@@ -253,7 +270,7 @@ mod responses {
 mod db {
     use r2d2::Pool;
     use r2d2_sqlite::{rusqlite, SqliteConnectionManager};
-    use rusqlite::types::ValueRef as SqlValue;
+    use rusqlite::types::Value as SqlValue;
     use serde_json::Value as JsonValue;
 
     use crate::{
@@ -293,6 +310,12 @@ mod db {
             sort_info: Option<(ColumnName, SortOrder)>,
             page: Option<Pagination>,
         ) -> impl std::future::Future<Output = Result<BoxList<Row>, Self::Error>> + Send;
+
+        fn get_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
+        ) -> impl std::future::Future<Output = Result<Option<Row>, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
@@ -367,6 +390,32 @@ mod db {
                     .collect();
 
                 Ok(columns)
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
+
+        async fn get_primary_key(
+            &self,
+            TableName(table_name): &TableName,
+        ) -> Result<ColumnName, rusqlite::Error> {
+            let pool = self.pool.clone();
+            let sql = format!(r#"PRAGMA table_info({table_name})"#);
+
+            tokio::task::spawn_blocking(move || -> Result<ColumnName, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+                let mut stmt = conn.prepare(&sql)?;
+
+                let primary_keys: BoxList<(BoxStr, bool)> = stmt
+                    .query_map((), |r| Ok((r.get(1)?, r.get(5)?)))?
+                    .collect::<Result<_, _>>()?;
+
+                let primary_key = primary_keys
+                    .iter()
+                    .find_map(|(column, pk)| if *pk { Some(column) } else { None })
+                    .expect("no column found at primary key index");
+
+                Ok(ColumnName(primary_key.clone()))
             })
             .await
             .expect("failed to spawn a tokio task")
@@ -483,7 +532,7 @@ mod db {
                                 (
                                     name.clone(),
                                     rusqlite_value_to_json(
-                                        r.get_ref(i).expect("failed to get column value"),
+                                        r.get_ref(i).expect("failed to get column value").into(),
                                     ),
                                 )
                             })
@@ -496,6 +545,52 @@ mod db {
             .await
             .expect("failed to spawn a tokio task")
         }
+
+        async fn get_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
+        ) -> Result<Option<Row>, Self::Error> {
+            let ColumnName(primary_key) = self.get_primary_key(&table_name).await?;
+            let pool = self.pool.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<Row, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let TableName(table_name) = table_name;
+                let sql = format!("SELECT * FROM {table_name} WHERE {primary_key} = ?");
+
+                let mut stmt = conn.prepare(&sql)?;
+                let column_names: BoxList<BoxStr> =
+                    stmt.column_names().into_iter().map(Into::into).collect();
+
+                let key = json_value_to_rusqlite(key);
+                let row = stmt.query_row([key], |r| {
+                    Ok(column_names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| {
+                            (
+                                name.clone(),
+                                rusqlite_value_to_json(
+                                    r.get_ref(i).expect("failed to get column value").into(),
+                                ),
+                            )
+                        })
+                        .collect())
+                })?;
+
+                Ok(row)
+            })
+            .await
+            .expect("failed to spawn a tokio task");
+
+            match result {
+                Ok(row) => Ok(Some(row)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(err) => Err(err),
+            }
+        }
     }
 
     pub fn rusqlite_value_to_json(v: SqlValue) -> JsonValue {
@@ -503,9 +598,35 @@ mod db {
             SqlValue::Null => JsonValue::Null,
             SqlValue::Integer(x) => serde_json::json!(x),
             SqlValue::Real(x) => serde_json::json!(x),
-            SqlValue::Text(s) => JsonValue::String(String::from_utf8_lossy(s).into_owned()),
+            SqlValue::Text(s) => JsonValue::String(s),
             SqlValue::Blob(s) => serde_json::json!(s),
         }
+    }
+
+    pub fn json_value_to_rusqlite(v: JsonValue) -> SqlValue {
+        match v {
+            JsonValue::Number(x) => {
+                if let Some(x) = x.as_i64() {
+                    return SqlValue::Integer(x);
+                }
+                if let Some(x) = x.as_f64() {
+                    return SqlValue::Real(x);
+                }
+
+                panic!("json number value {x} can not be transformed into a sqlite number value");
+            }
+            JsonValue::String(s) => SqlValue::Text(s),
+            _ => {
+                panic!("expected json key to be number or string");
+            }
+        }
+        // match v {
+        //     SqlValue::Null => JsonValue::Null,
+        //     SqlValue::Integer(x) => serde_json::json!(x),
+        //     SqlValue::Real(x) => serde_json::json!(x),
+        //     SqlValue::Text(s) => JsonValue::String(String::from_utf8_lossy(s).into_owned()),
+        //     SqlValue::Blob(s) => serde_json::json!(s),
+        // }
     }
 }
 
@@ -520,7 +641,7 @@ mod app {
     use crate::{
         db::Database,
         requests::ApiRequest,
-        responses::{ApiResponse, ListRowsResponse},
+        responses::{ApiResponse, GetRowResponse, ListRowsResponse},
         BoxStr,
     };
 
@@ -545,6 +666,8 @@ mod app {
         SortColumnNotFound { column: BoxStr },
         #[error("pagination is one based")]
         PageNumberCanNotBeZero,
+        #[error("row not found")]
+        RowNotFound,
     }
 
     impl<DB: Database> App<DB> {
@@ -609,6 +732,23 @@ mod app {
                         ApiResponse::ListRows(ListRowsResponse {
                             table: req.table,
                             rows,
+                            request_id: req.request_id,
+                        })
+                    }
+                    ApiRequest::GetRow(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+
+                        let row = db
+                            .get_row(table_name, req.key)
+                            .await?
+                            .ok_or(Self::Error::RowNotFound)?;
+                        ApiResponse::GetRow(GetRowResponse {
+                            table: req.table,
+                            row,
                             request_id: req.request_id,
                         })
                     }

@@ -44,6 +44,17 @@ function App() {
     mutate(req);
   }
 
+  function getRow(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const data = new FormData(e.target as HTMLFormElement);
+
+    const table = data.get("table");
+    const key = data.get("key");
+
+    const req = ApiRequest.parse({ type: "GetRow", table, key });
+    mutate(req);
+  }
+
   return (
     <>
       <h1>Result</h1>
@@ -68,7 +79,7 @@ function App() {
           </div>
 
           <div>
-            <input checked type="radio" id="order" name="order" value="Asc" />
+            <input type="radio" id="order" name="order" value="Asc" />
             <label htmlFor="order">Asc</label>
             <br />
             <input type="radio" id="order" name="order" value="Desc" />
@@ -81,6 +92,23 @@ function App() {
             <br />
             <label htmlFor="page_size">Page Size</label>
             <input type="number" id="page_size" name="page_size" />
+          </div>
+
+          <input type="submit" value="Submit" />
+        </fieldset>
+      </form>
+
+      <form onSubmit={getRow}>
+        <h1>Get row</h1>
+        <fieldset>
+          <div>
+            <label htmlFor="table">Table</label>
+            <input type="text" id="table" name="table" />
+          </div>
+
+          <div>
+            <label htmlFor="key">Key</label>
+            <input type="text" id="key" name="key" />
           </div>
 
           <input type="submit" value="Submit" />
