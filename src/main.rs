@@ -168,6 +168,7 @@ mod requests {
     #[derive(Debug, Deserialize)]
     pub struct ListRowsRequest {
         pub table: Box<str>,
+        pub select: Vec<Box<str>>,
         pub request_id: Box<str>,
     }
 }
@@ -220,6 +221,7 @@ mod db {
     use crate::responses::Row;
 
     pub struct TableName(Box<str>);
+    pub struct ColumnName(Box<str>);
 
     pub trait Database: Clone + Send {
         type Error: std::error::Error;
@@ -229,9 +231,17 @@ mod db {
             table_name: &str,
         ) -> impl std::future::Future<Output = Result<Option<TableName>, Self::Error>> + Send;
 
+        fn check_column_names(
+            &self,
+            table_name: &TableName,
+            column_names: &[Box<str>],
+        ) -> impl std::future::Future<Output = Result<(Vec<ColumnName>, Vec<Box<str>>), Self::Error>>
+               + Send;
+
         fn list_rows(
             &self,
             table_name: TableName,
+            column_names: Vec<ColumnName>,
         ) -> impl std::future::Future<Output = Result<Vec<Row>, Self::Error>> + Send;
     }
 
@@ -288,6 +298,29 @@ mod db {
             .await
             .expect("failed to spawn a tokio task")
         }
+
+        async fn get_columns(
+            &self,
+            TableName(table_name): &TableName,
+        ) -> Result<Vec<Box<str>>, rusqlite::Error> {
+            let pool = self.pool.clone();
+            let sql = format!(r#"SELECT * FROM {table_name}"#);
+
+            tokio::task::spawn_blocking(move || -> Result<Vec<Box<str>>, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let columns = conn
+                    .prepare(&sql)?
+                    .column_names()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
+
+                Ok(columns)
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
     }
 
     impl Database for SqlxDatabase {
@@ -305,15 +338,57 @@ mod db {
                 .map(TableName))
         }
 
+        async fn check_column_names(
+            &self,
+            table_name: &TableName,
+            column_names: &[Box<str>],
+        ) -> Result<(Vec<ColumnName>, Vec<Box<str>>), Self::Error> {
+            let all_columns = self.get_columns(table_name).await?;
+
+            Ok(column_names.into_iter().fold(
+                (
+                    Vec::with_capacity(column_names.len()),
+                    Vec::with_capacity(column_names.len()),
+                ),
+                |(mut found, mut not_found), n| {
+                    match all_columns
+                        .iter()
+                        .find(|column| n.to_lowercase() == column.to_lowercase())
+                        .map(|n| ColumnName(n.clone()))
+                    {
+                        Some(col) => {
+                            found.push(col);
+                        }
+                        None => {
+                            not_found.push(n.clone());
+                        }
+                    };
+
+                    (found, not_found)
+                },
+            ))
+        }
+
         async fn list_rows(
             &self,
             TableName(table_name): TableName,
+            column_names: Vec<ColumnName>,
         ) -> Result<Vec<Row>, Self::Error> {
             let pool = self.pool.clone();
             tokio::task::spawn_blocking(move || -> Result<Vec<Row>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
-                let sql = format!("SELECT * FROM {table_name}");
+                let selects = if column_names.is_empty() {
+                    "*".into()
+                } else {
+                    column_names
+                        .into_iter()
+                        .map(|c| c.0)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+
+                let sql = format!("SELECT {selects} FROM {table_name}");
                 let mut stmt = conn.prepare(&sql)?;
 
                 let column_names: Vec<Box<str>> =
@@ -382,8 +457,10 @@ mod app {
             #[serde(skip)]
             error: DBError,
         },
-        #[error("database operation failed: {table}")]
+        #[error("table not found: {table}")]
         TableNotFound { table: Box<str> },
+        #[error("column not found: {columns:?}")]
+        ColumnsNotFound { columns: Vec<Box<str>> },
     }
 
     impl<DB: Database> App<DB> {
@@ -416,7 +493,18 @@ mod app {
                                 table: req.table.clone(),
                             },
                         )?;
-                        let rows = db.list_rows(table_name).await?;
+
+                        let (found_columns, not_found_columns) = db
+                            .check_column_names(&table_name, req.select.as_slice())
+                            .await?;
+
+                        if !not_found_columns.is_empty() {
+                            return Err(Self::Error::ColumnsNotFound {
+                                columns: not_found_columns,
+                            });
+                        }
+
+                        let rows = db.list_rows(table_name, found_columns).await?;
                         ApiResponse::ListRows(ListRowsResponse {
                             table: req.table,
                             rows,

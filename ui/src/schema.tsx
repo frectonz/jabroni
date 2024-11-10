@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 
 const ListRowsRequest = z.object({
   table: z.string(),
+  select: z.array(z.string()).default([]),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -28,8 +29,13 @@ const TableNotFound = z.object({
   table: z.string(),
 });
 
+const ColumnsNotFound = z.object({
+  columns: z.array(z.string()),
+});
+
 export const ErrorResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("BadRequest"), ...ErrorMessage.shape }),
   z.object({ type: z.literal("NonTextMessage") }),
   z.object({ type: z.literal("TableNotFound"), ...TableNotFound.shape }),
+  z.object({ type: z.literal("ColumnsNotFound"), ...ColumnsNotFound.shape }),
 ]);
