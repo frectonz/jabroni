@@ -160,7 +160,7 @@ async fn accept_connection(stream: TcpStream, db: SqliteDatabase) {
 }
 
 mod requests {
-    use std::fmt::Display;
+    use std::{collections::HashMap, fmt::Display};
 
     use serde::Deserialize;
     use serde_json::Value as JsonValue;
@@ -172,6 +172,7 @@ mod requests {
     pub enum ApiRequest {
         ListRows(ListRowsRequest),
         GetRow(GetRowRequest),
+        InsertRow(InsertRowRequest),
     }
 
     #[derive(Debug, Deserialize)]
@@ -217,6 +218,13 @@ mod requests {
         pub select: BoxList<BoxStr>,
         pub request_id: BoxStr,
     }
+
+    #[derive(Debug, Deserialize)]
+    pub struct InsertRowRequest {
+        pub table: BoxStr,
+        pub data: HashMap<BoxStr, JsonValue>,
+        pub request_id: BoxStr,
+    }
 }
 
 mod responses {
@@ -233,6 +241,7 @@ mod responses {
     pub enum ApiResponse {
         ListRows(ListRowsResponse),
         GetRow(GetRowResponse),
+        InsertRow(InsertRowResponse),
     }
 
     #[derive(Debug, Serialize)]
@@ -246,6 +255,13 @@ mod responses {
     pub struct GetRowResponse {
         pub table: BoxStr,
         pub row: Row,
+        pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct InsertRowResponse {
+        pub table: BoxStr,
+        pub inserted_rows: usize,
         pub request_id: BoxStr,
     }
 
@@ -269,6 +285,8 @@ mod responses {
 }
 
 mod db {
+    use std::collections::HashMap;
+
     use r2d2::Pool;
     use r2d2_sqlite::{rusqlite, SqliteConnectionManager};
     use rusqlite::types::Value as SqlValue;
@@ -281,8 +299,15 @@ mod db {
     };
 
     pub struct TableName(BoxStr);
+    #[derive(Eq, PartialEq, Hash, Clone)]
     pub struct ColumnName(BoxStr);
     pub type Columns = Vec<ColumnName>;
+
+    impl ColumnName {
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
 
     pub trait Database: Clone + Send {
         type Error: std::error::Error;
@@ -318,6 +343,12 @@ mod db {
             key: JsonValue,
             column_names: Columns,
         ) -> impl std::future::Future<Output = Result<Option<Row>, Self::Error>> + Send;
+
+        fn insert_row(
+            &self,
+            table_name: TableName,
+            data: HashMap<ColumnName, serde_json::Value>,
+        ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
@@ -604,6 +635,39 @@ mod db {
                 Err(err) => Err(err),
             }
         }
+
+        async fn insert_row(
+            &self,
+            TableName(table_name): TableName,
+            data: HashMap<ColumnName, serde_json::Value>,
+        ) -> Result<usize, Self::Error> {
+            let pool = self.pool.clone();
+
+            tokio::task::spawn_blocking(move || -> Result<usize, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let columns = data
+                    .keys()
+                    .cloned()
+                    .map(|ColumnName(col)| col)
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let values = data
+                    .into_values()
+                    .map(json_to_rusqlite)
+                    .map(rusqlite_to_str)
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let sql = format!("INSERT INTO {table_name} ({columns}) VALUES ({values})");
+                let inserted_rows = conn.execute(&sql, ())?;
+
+                Ok(inserted_rows)
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
     }
 
     pub fn rusqlite_to_json(v: SqlValue) -> JsonValue {
@@ -613,6 +677,16 @@ mod db {
             SqlValue::Real(x) => serde_json::json!(x),
             SqlValue::Text(s) => JsonValue::String(s),
             SqlValue::Blob(s) => serde_json::json!(s),
+        }
+    }
+
+    pub fn rusqlite_to_str(v: SqlValue) -> BoxStr {
+        match v {
+            SqlValue::Null => Box::from("null"),
+            SqlValue::Integer(x) => x.to_string().into(),
+            SqlValue::Real(x) => x.to_string().into(),
+            SqlValue::Text(s) => format!("'{s}'").into(),
+            SqlValue::Blob(s) => format!("X'{}'", hex::encode(s)).into(),
         }
     }
 
@@ -637,7 +711,10 @@ mod db {
 }
 
 mod app {
-    use std::task::{Context, Poll};
+    use std::{
+        collections::HashMap,
+        task::{Context, Poll},
+    };
 
     use futures::future;
     use serde::Serialize;
@@ -647,8 +724,8 @@ mod app {
     use crate::{
         db::Database,
         requests::ApiRequest,
-        responses::{ApiResponse, GetRowResponse, ListRowsResponse},
-        BoxStr,
+        responses::{ApiResponse, GetRowResponse, InsertRowResponse, ListRowsResponse},
+        BoxList, BoxStr,
     };
 
     pub struct App<DB: Database> {
@@ -764,6 +841,43 @@ mod app {
                         ApiResponse::GetRow(GetRowResponse {
                             table: req.table,
                             row,
+                            request_id: req.request_id,
+                        })
+                    }
+                    ApiRequest::InsertRow(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+
+                        let columns: BoxList<_> =
+                            req.data.keys().map(|k| k.to_owned()).collect();
+
+                        let (found_columns, not_found_columns) =
+                            db.check_column_names(&table_name, &columns).await?;
+
+                        if !not_found_columns.is_empty() {
+                            return Err(Self::Error::ColumnsNotFound {
+                                columns: not_found_columns,
+                            });
+                        }
+
+                        let row: HashMap<_, _> = req
+                            .data
+                            .into_iter()
+                            .filter_map(|(key, value)| {
+                                found_columns
+                                    .iter()
+                                    .find(|col| *col.as_str() == *key)
+                                    .map(|col| (col.clone(), value))
+                            })
+                            .collect();
+
+                        let inserted_rows = db.insert_row(table_name, row).await?;
+                        ApiResponse::InsertRow(InsertRowResponse {
+                            table: req.table,
+                            inserted_rows,
                             request_id: req.request_id,
                         })
                     }
