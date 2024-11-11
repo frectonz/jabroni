@@ -214,6 +214,7 @@ mod requests {
     pub struct GetRowRequest {
         pub table: BoxStr,
         pub key: JsonValue,
+        pub select: BoxList<BoxStr>,
         pub request_id: BoxStr,
     }
 }
@@ -315,6 +316,7 @@ mod db {
             &self,
             table_name: TableName,
             key: JsonValue,
+            column_names: Columns,
         ) -> impl std::future::Future<Output = Result<Option<Row>, Self::Error>> + Send;
     }
 
@@ -550,6 +552,7 @@ mod db {
             &self,
             table_name: TableName,
             key: JsonValue,
+            column_names: Columns,
         ) -> Result<Option<Row>, Self::Error> {
             let ColumnName(primary_key) = self.get_primary_key(&table_name).await?;
             let pool = self.pool.clone();
@@ -557,8 +560,18 @@ mod db {
             let result = tokio::task::spawn_blocking(move || -> Result<Row, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
+                let selects = if column_names.is_empty() {
+                    "*".into()
+                } else {
+                    column_names
+                        .into_iter()
+                        .map(|c| c.0)
+                        .collect::<BoxList<_>>()
+                        .join(",")
+                };
+
                 let TableName(table_name) = table_name;
-                let sql = format!("SELECT * FROM {table_name} WHERE {primary_key} = ?");
+                let sql = format!("SELECT {selects} FROM {table_name} WHERE {primary_key} = ?");
 
                 let mut stmt = conn.prepare(&sql)?;
                 let column_names: BoxList<BoxStr> =
@@ -735,8 +748,17 @@ mod app {
                             },
                         )?;
 
+                        let (found_columns, not_found_columns) =
+                            db.check_column_names(&table_name, &req.select).await?;
+
+                        if !not_found_columns.is_empty() {
+                            return Err(Self::Error::ColumnsNotFound {
+                                columns: not_found_columns,
+                            });
+                        }
+
                         let row = db
-                            .get_row(table_name, req.key)
+                            .get_row(table_name, req.key, found_columns)
                             .await?
                             .ok_or(Self::Error::RowNotFound)?;
                         ApiResponse::GetRow(GetRowResponse {

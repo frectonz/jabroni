@@ -22,6 +22,7 @@ const ListRowsRequest = z.object({
 const GetRowRequest = z.object({
   table: z.string(),
   key: z.any(),
+  select: z.array(z.string()).default([]),
   request_id: z.string().default(() => nanoid()),
 });
 

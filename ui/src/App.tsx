@@ -51,7 +51,10 @@ function App() {
     const table = data.get("table");
     const key = data.get("key");
 
-    const req = ApiRequest.parse({ type: "GetRow", table, key });
+    const selectStr = data.get("select")!.toString();
+    const select = selectStr === "" ? [] : selectStr.split(",");
+
+    const req = ApiRequest.parse({ type: "GetRow", table, key, select });
     mutate(req);
   }
 
@@ -109,6 +112,11 @@ function App() {
           <div>
             <label htmlFor="key">Key</label>
             <input type="text" id="key" name="key" />
+          </div>
+
+          <div>
+            <label htmlFor="select">Select</label>
+            <input type="text" id="select" name="select" />
           </div>
 
           <input type="submit" value="Submit" />
