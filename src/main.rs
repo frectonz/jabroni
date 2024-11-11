@@ -531,7 +531,7 @@ mod db {
                             .map(|(i, name)| {
                                 (
                                     name.clone(),
-                                    rusqlite_value_to_json(
+                                    rusqlite_to_json(
                                         r.get_ref(i).expect("failed to get column value").into(),
                                     ),
                                 )
@@ -564,7 +564,7 @@ mod db {
                 let column_names: BoxList<BoxStr> =
                     stmt.column_names().into_iter().map(Into::into).collect();
 
-                let key = json_value_to_rusqlite(key);
+                let key = json_to_rusqlite(key);
                 let row = stmt.query_row([key], |r| {
                     Ok(column_names
                         .iter()
@@ -572,7 +572,7 @@ mod db {
                         .map(|(i, name)| {
                             (
                                 name.clone(),
-                                rusqlite_value_to_json(
+                                rusqlite_to_json(
                                     r.get_ref(i).expect("failed to get column value").into(),
                                 ),
                             )
@@ -593,7 +593,7 @@ mod db {
         }
     }
 
-    pub fn rusqlite_value_to_json(v: SqlValue) -> JsonValue {
+    pub fn rusqlite_to_json(v: SqlValue) -> JsonValue {
         match v {
             SqlValue::Null => JsonValue::Null,
             SqlValue::Integer(x) => serde_json::json!(x),
@@ -603,7 +603,7 @@ mod db {
         }
     }
 
-    pub fn json_value_to_rusqlite(v: JsonValue) -> SqlValue {
+    pub fn json_to_rusqlite(v: JsonValue) -> SqlValue {
         match v {
             JsonValue::Number(x) => {
                 if let Some(x) = x.as_i64() {
@@ -620,13 +620,6 @@ mod db {
                 panic!("expected json key to be number or string");
             }
         }
-        // match v {
-        //     SqlValue::Null => JsonValue::Null,
-        //     SqlValue::Integer(x) => serde_json::json!(x),
-        //     SqlValue::Real(x) => serde_json::json!(x),
-        //     SqlValue::Text(s) => JsonValue::String(String::from_utf8_lossy(s).into_owned()),
-        //     SqlValue::Blob(s) => serde_json::json!(s),
-        // }
     }
 }
 
