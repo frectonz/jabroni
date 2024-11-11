@@ -104,7 +104,6 @@ export async function makeWebSocketFetch(
     openPromises.push(
       new Promise((res) => {
         socket.onopen = () => {
-          console.log(i, "WebSocket connected");
           res();
         };
       }),
