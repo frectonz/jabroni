@@ -30,9 +30,16 @@ const GetRowRequest = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const InsertRowRequest = z.object({
+  table: z.string(),
+  data: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsRequest.shape }),
   z.object({ type: z.literal("GetRow"), ...GetRowRequest.shape }),
+  z.object({ type: z.literal("InsertRow"), ...InsertRowRequest.shape }),
 ]);
 
 const ListRowsResponse = z.object({
@@ -47,9 +54,16 @@ const GetRowResponse = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const InsertRowResponse = z.object({
+  table: z.string(),
+  inserted_rows: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsResponse.shape }),
   z.object({ type: z.literal("GetRow"), ...GetRowResponse.shape }),
+  z.object({ type: z.literal("InsertRow"), ...InsertRowResponse.shape }),
 ]);
 
 const ErrorMessage = z.object({
@@ -141,11 +155,9 @@ export async function makeWebSocketFetch(
           return resolve({ error: error.data });
         }
 
-        const resp = ApiResponse.safeParse(JSON.parse(event.data));
-        if (resp.data && resp.data.request_id == request_id) {
-          socket.removeEventListener("message", handleMessage);
-          return resolve({ data: resp.data });
-        }
+        const resp = ApiResponse.parse(JSON.parse(event.data));
+        socket.removeEventListener("message", handleMessage);
+        return resolve({ data: resp });
       }
 
       socket.addEventListener("message", handleMessage);
