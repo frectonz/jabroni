@@ -851,8 +851,7 @@ mod app {
                             },
                         )?;
 
-                        let columns: BoxList<_> =
-                            req.data.keys().map(|k| k.to_owned()).collect();
+                        let columns: BoxList<_> = req.data.keys().map(|k| k.to_owned()).collect();
 
                         let (found_columns, not_found_columns) =
                             db.check_column_names(&table_name, &columns).await?;
