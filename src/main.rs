@@ -173,6 +173,7 @@ mod requests {
         ListRows(ListRowsRequest),
         GetRow(GetRowRequest),
         InsertRow(InsertRowRequest),
+        DeleteRow(DeleteRowRequest),
     }
 
     #[derive(Debug, Deserialize)]
@@ -225,6 +226,13 @@ mod requests {
         pub data: HashMap<BoxStr, JsonValue>,
         pub request_id: BoxStr,
     }
+
+    #[derive(Debug, Deserialize)]
+    pub struct DeleteRowRequest {
+        pub table: BoxStr,
+        pub key: JsonValue,
+        pub request_id: BoxStr,
+    }
 }
 
 mod responses {
@@ -242,6 +250,7 @@ mod responses {
         ListRows(ListRowsResponse),
         GetRow(GetRowResponse),
         InsertRow(InsertRowResponse),
+        DeleteRow(DeleteRowResponse),
     }
 
     #[derive(Debug, Serialize)]
@@ -262,6 +271,13 @@ mod responses {
     pub struct InsertRowResponse {
         pub table: BoxStr,
         pub inserted_rows: usize,
+        pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct DeleteRowResponse {
+        pub table: BoxStr,
+        pub deleted_rows: usize,
         pub request_id: BoxStr,
     }
 
@@ -299,7 +315,7 @@ mod db {
     };
 
     pub struct TableName(BoxStr);
-    #[derive(Eq, PartialEq, Hash, Clone)]
+    #[derive(Eq, PartialEq, Hash, Clone, Debug)]
     pub struct ColumnName(BoxStr);
     pub type Columns = Vec<ColumnName>;
 
@@ -348,6 +364,12 @@ mod db {
             &self,
             table_name: TableName,
             data: HashMap<ColumnName, serde_json::Value>,
+        ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
+
+        fn delete_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
         ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
     }
 
@@ -661,9 +683,28 @@ mod db {
                     .join(",");
 
                 let sql = format!("INSERT INTO {table_name} ({columns}) VALUES ({values})");
-                let inserted_rows = conn.execute(&sql, ())?;
+                conn.execute(&sql, ())
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
 
-                Ok(inserted_rows)
+        async fn delete_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
+        ) -> Result<usize, Self::Error> {
+            let ColumnName(primary_key) = self.get_primary_key(&table_name).await?;
+            let pool = self.pool.clone();
+
+            tokio::task::spawn_blocking(move || -> Result<usize, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let TableName(table_name) = table_name;
+                let sql = format!("DELETE FROM {table_name} WHERE {primary_key} = ?");
+
+                let key = json_to_rusqlite(key);
+                conn.execute(&sql, [key])
             })
             .await
             .expect("failed to spawn a tokio task")
@@ -692,6 +733,7 @@ mod db {
 
     pub fn json_to_rusqlite(v: JsonValue) -> SqlValue {
         match v {
+            JsonValue::Null => SqlValue::Null,
             JsonValue::Number(x) => {
                 if let Some(x) = x.as_i64() {
                     return SqlValue::Integer(x);
@@ -724,7 +766,9 @@ mod app {
     use crate::{
         db::Database,
         requests::ApiRequest,
-        responses::{ApiResponse, GetRowResponse, InsertRowResponse, ListRowsResponse},
+        responses::{
+            ApiResponse, DeleteRowResponse, GetRowResponse, InsertRowResponse, ListRowsResponse,
+        },
         BoxList, BoxStr,
     };
 
@@ -877,6 +921,20 @@ mod app {
                         ApiResponse::InsertRow(InsertRowResponse {
                             table: req.table,
                             inserted_rows,
+                            request_id: req.request_id,
+                        })
+                    }
+                    ApiRequest::DeleteRow(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+
+                        let deleted_rows = db.delete_row(table_name, req.key).await?;
+                        ApiResponse::DeleteRow(DeleteRowResponse {
+                            table: req.table,
+                            deleted_rows,
                             request_id: req.request_id,
                         })
                     }

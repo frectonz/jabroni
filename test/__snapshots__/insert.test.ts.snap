@@ -1,0 +1,23 @@
+export const snapshot = {};
+
+snapshot[`insert a row into a table 1`] = `
+{
+  data: {
+    inserted_rows: 1,
+    request_id: "",
+    table: "employees",
+    type: "InsertRow",
+  },
+}
+`;
+
+snapshot[`delete a row from a table 1`] = `
+{
+  data: {
+    deleted_rows: 1,
+    request_id: "",
+    table: "employees",
+    type: "DeleteRow",
+  },
+}
+`;

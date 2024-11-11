@@ -36,10 +36,17 @@ const InsertRowRequest = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const DeleteRowRequest = z.object({
+  table: z.string(),
+  key: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsRequest.shape }),
   z.object({ type: z.literal("GetRow"), ...GetRowRequest.shape }),
   z.object({ type: z.literal("InsertRow"), ...InsertRowRequest.shape }),
+  z.object({ type: z.literal("DeleteRow"), ...DeleteRowRequest.shape }),
 ]);
 
 const ListRowsResponse = z.object({
@@ -60,10 +67,17 @@ const InsertRowResponse = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const DeleteRowResponse = z.object({
+  table: z.string(),
+  deleted_rows: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsResponse.shape }),
   z.object({ type: z.literal("GetRow"), ...GetRowResponse.shape }),
   z.object({ type: z.literal("InsertRow"), ...InsertRowResponse.shape }),
+  z.object({ type: z.literal("DeleteRow"), ...DeleteRowResponse.shape }),
 ]);
 
 const ErrorMessage = z.object({

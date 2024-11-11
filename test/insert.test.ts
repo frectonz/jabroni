@@ -29,3 +29,13 @@ Deno.test(
     request_id: nanoid(),
   }),
 );
+
+Deno.test(
+  "delete a row from a table",
+  snapshotTest($fetch, {
+    type: "DeleteRow",
+    table: "employees",
+    key: 9,
+    request_id: nanoid(),
+  }),
+);
