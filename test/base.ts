@@ -107,6 +107,7 @@ export const ErrorResponse = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("PageNumberCanNotBeZero") }),
   z.object({ type: z.literal("RowNotFound") }),
+  z.object({ type: z.literal("DatabaseError") }),
 ]);
 
 type MakeFetchOptions = {

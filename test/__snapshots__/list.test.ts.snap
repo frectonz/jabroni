@@ -184,6 +184,18 @@ snapshot[`list table with selected columns 1`] = `
 }
 `;
 
+snapshot[`list table with columns that don't exist 1`] = `
+{
+  error: {
+    columns: [
+      "cat",
+      "dog",
+    ],
+    type: "ColumnsNotFound",
+  },
+}
+`;
+
 snapshot[`list table sorted on a column 1`] = `
 {
   data: {
@@ -228,6 +240,15 @@ snapshot[`list table sorted on a column 1`] = `
 }
 `;
 
+snapshot[`list table sorted on a column that doesn't exist 1`] = `
+{
+  error: {
+    column: "FullName",
+    type: "SortColumnNotFound",
+  },
+}
+`;
+
 snapshot[`list table with pagination 1`] = `
 {
   data: {
@@ -244,6 +265,14 @@ snapshot[`list table with pagination 1`] = `
     ],
     table: "employees",
     type: "ListRows",
+  },
+}
+`;
+
+snapshot[`list table pagination is one based 1`] = `
+{
+  error: {
+    type: "PageNumberCanNotBeZero",
   },
 }
 `;

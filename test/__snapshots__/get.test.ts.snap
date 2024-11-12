@@ -41,3 +41,20 @@ snapshot[`get single row with selected columns 1`] = `
   },
 }
 `;
+
+snapshot[`get single row from a table that does not exist 1`] = `
+{
+  error: {
+    table: "cats",
+    type: "TableNotFound",
+  },
+}
+`;
+
+snapshot[`get single row from a with a non existent key 1`] = `
+{
+  error: {
+    type: "RowNotFound",
+  },
+}
+`;
