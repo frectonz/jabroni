@@ -46,3 +46,54 @@ snapshot[`delete a row from a table 1`] = `
   },
 }
 `;
+
+snapshot[`insert a batch of rows into a table 1`] = `
+{
+  data: {
+    inserted_rows: 2,
+    request_id: "",
+    table: "media_types",
+    type: "BatchInsertRow",
+  },
+}
+`;
+
+snapshot[`list media types table 1`] = `
+{
+  data: {
+    request_id: "",
+    rows: [
+      {
+        MediaTypeId: 1,
+        Name: "MPEG audio file",
+      },
+      {
+        MediaTypeId: 2,
+        Name: "Protected AAC audio file",
+      },
+      {
+        MediaTypeId: 3,
+        Name: "Protected MPEG-4 video file",
+      },
+      {
+        MediaTypeId: 4,
+        Name: "Purchased AAC audio file",
+      },
+      {
+        MediaTypeId: 5,
+        Name: "AAC audio file",
+      },
+      {
+        MediaTypeId: 6,
+        Name: "batch one",
+      },
+      {
+        MediaTypeId: 7,
+        Name: "batch two",
+      },
+    ],
+    table: "media_types",
+    type: "ListRows",
+  },
+}
+`;

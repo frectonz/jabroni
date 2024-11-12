@@ -49,12 +49,23 @@ const UpdateRowRequest = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+const BatchInsertRowRequest = z.object({
+  table: z.string(),
+  key: z.any(),
+  data: z.any(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const ApiRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ListRows"), ...ListRowsRequest.shape }),
   z.object({ type: z.literal("GetRow"), ...GetRowRequest.shape }),
   z.object({ type: z.literal("InsertRow"), ...InsertRowRequest.shape }),
   z.object({ type: z.literal("DeleteRow"), ...DeleteRowRequest.shape }),
   z.object({ type: z.literal("UpdateRow"), ...UpdateRowRequest.shape }),
+  z.object({
+    type: z.literal("BatchInsertRow"),
+    ...BatchInsertRowRequest.shape,
+  }),
 ]);
 
 const ListRowsResponse = z.object({
@@ -93,6 +104,7 @@ export const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("InsertRow"), ...InsertRowResponse.shape }),
   z.object({ type: z.literal("DeleteRow"), ...DeleteRowResponse.shape }),
   z.object({ type: z.literal("UpdateRow"), ...UpdateRowResponse.shape }),
+  z.object({ type: z.literal("BatchInsertRow"), ...InsertRowResponse.shape }),
 ]);
 
 const ErrorMessage = z.object({

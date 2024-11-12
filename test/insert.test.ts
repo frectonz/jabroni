@@ -64,3 +64,26 @@ Deno.test(
     request_id: nanoid(),
   }),
 );
+
+Deno.test(
+  "insert a batch of rows into a table",
+  snapshotTest($fetch, {
+    type: "BatchInsertRow",
+    table: "media_types",
+    data: [
+      { Name: "batch one" },
+      { Name: "batch two" },
+    ],
+    request_id: nanoid(),
+  }),
+);
+
+Deno.test(
+  "list media types table",
+  snapshotTest($fetch, {
+    type: "ListRows",
+    table: "media_types",
+    select: [],
+    request_id: nanoid(),
+  }),
+);

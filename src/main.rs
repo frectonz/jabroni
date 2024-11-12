@@ -173,6 +173,7 @@ mod requests {
         ListRows(ListRowsRequest),
         GetRow(GetRowRequest),
         InsertRow(InsertRowRequest),
+        BatchInsertRow(BatchInsertRowRequest),
         DeleteRow(DeleteRowRequest),
         UpdateRow(UpdateRowRequest),
     }
@@ -229,6 +230,13 @@ mod requests {
     }
 
     #[derive(Debug, Deserialize)]
+    pub struct BatchInsertRowRequest {
+        pub table: BoxStr,
+        pub data: Vec<HashMap<BoxStr, JsonValue>>,
+        pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Deserialize)]
     pub struct DeleteRowRequest {
         pub table: BoxStr,
         pub key: JsonValue,
@@ -259,6 +267,7 @@ mod responses {
         ListRows(ListRowsResponse),
         GetRow(GetRowResponse),
         InsertRow(InsertRowResponse),
+        BatchInsertRow(InsertRowResponse),
         DeleteRow(DeleteRowResponse),
         UpdateRow(UpdateRowResponse),
     }
@@ -381,6 +390,12 @@ mod db {
             &self,
             table_name: TableName,
             data: HashMap<ColumnName, serde_json::Value>,
+        ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
+
+        fn batch_insert_row(
+            &self,
+            table_name: TableName,
+            data: Vec<HashMap<ColumnName, serde_json::Value>>,
         ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
 
         fn delete_row(
@@ -769,6 +784,44 @@ mod db {
                 Err(err) => Err(err),
             }
         }
+
+        async fn batch_insert_row(
+            &self,
+            TableName(table_name): TableName,
+            data: Vec<HashMap<ColumnName, serde_json::Value>>,
+        ) -> Result<usize, Self::Error> {
+            let pool = self.pool.clone();
+
+            tokio::task::spawn_blocking(move || -> Result<usize, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let columns = data[0]
+                    .keys()
+                    .cloned()
+                    .map(|ColumnName(col)| col)
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let values = data
+                    .into_iter()
+                    .map(|d| {
+                        let v = d
+                            .into_values()
+                            .map(json_to_rusqlite)
+                            .map(rusqlite_to_str)
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        format!("({v})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let sql = format!("INSERT INTO {table_name} ({columns}) VALUES {values}");
+                conn.execute(&sql, ())
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
     }
 
     pub fn rusqlite_to_json(v: SqlValue) -> JsonValue {
@@ -856,6 +909,10 @@ mod app {
         PageNumberCanNotBeZero,
         #[error("row not found")]
         RowNotFound,
+        #[error("batch insert must have at least one row")]
+        BatchInsertWithNoData,
+        #[error("batch insert must all have the same columns")]
+        BatchInsertWithIrregularColumns,
     }
 
     impl<DB: Database> App<DB> {
@@ -1036,6 +1093,60 @@ mod app {
                         ApiResponse::UpdateRow(UpdateRowResponse {
                             table: req.table,
                             updated_rows,
+                            request_id: req.request_id,
+                        })
+                    }
+                    ApiRequest::BatchInsertRow(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+
+                        if req.data.is_empty() {
+                            return Err(Self::Error::BatchInsertWithNoData);
+                        }
+
+                        let mut rows = Vec::with_capacity(req.data.len());
+                        let mut all_columns = Vec::with_capacity(req.data.len());
+
+                        for data in req.data {
+                            let mut columns: BoxList<_> =
+                                data.keys().map(|k| k.to_owned()).collect();
+
+                            let (found_columns, not_found_columns) =
+                                db.check_column_names(&table_name, &columns).await?;
+
+                            if !not_found_columns.is_empty() {
+                                return Err(Self::Error::ColumnsNotFound {
+                                    columns: not_found_columns,
+                                });
+                            }
+
+                            let row: HashMap<_, _> = data
+                                .into_iter()
+                                .filter_map(|(key, value)| {
+                                    found_columns
+                                        .iter()
+                                        .find(|col| *col.as_str() == *key)
+                                        .map(|col| (col.clone(), value))
+                                })
+                                .collect();
+
+                            rows.push(row);
+                            columns.sort();
+                            all_columns.push(columns);
+                        }
+
+                        let all_equal = all_columns.iter().all(|list| list == &all_columns[0]);
+                        if !all_equal {
+                            return Err(Self::Error::BatchInsertWithIrregularColumns);
+                        }
+
+                        let inserted_rows = db.batch_insert_row(table_name, rows).await?;
+                        ApiResponse::BatchInsertRow(InsertRowResponse {
+                            table: req.table,
+                            inserted_rows,
                             request_id: req.request_id,
                         })
                     }
