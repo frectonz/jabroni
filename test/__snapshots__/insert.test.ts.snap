@@ -11,6 +11,31 @@ snapshot[`insert a row into a table 1`] = `
 }
 `;
 
+snapshot[`update a row 1`] = `
+{
+  data: {
+    request_id: "",
+    table: "employees",
+    type: "UpdateRow",
+    updated_rows: 1,
+  },
+}
+`;
+
+snapshot[`get single row 1`] = `
+{
+  data: {
+    request_id: "",
+    row: {
+      City: "Addis",
+      Country: "Ethiopia",
+    },
+    table: "employees",
+    type: "GetRow",
+  },
+}
+`;
+
 snapshot[`delete a row from a table 1`] = `
 {
   data: {

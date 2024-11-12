@@ -31,6 +31,31 @@ Deno.test(
 );
 
 Deno.test(
+  "update a row",
+  snapshotTest($fetch, {
+    type: "UpdateRow",
+    table: "employees",
+    key: 9,
+    data: {
+      City: "Addis",
+      Country: "Ethiopia",
+    },
+    request_id: nanoid(),
+  }),
+);
+
+Deno.test(
+  "get single row",
+  snapshotTest($fetch, {
+    type: "GetRow",
+    table: "employees",
+    key: 9,
+    select: ["city", "country"],
+    request_id: nanoid(),
+  }),
+);
+
+Deno.test(
   "delete a row from a table",
   snapshotTest($fetch, {
     type: "DeleteRow",

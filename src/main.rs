@@ -174,6 +174,7 @@ mod requests {
         GetRow(GetRowRequest),
         InsertRow(InsertRowRequest),
         DeleteRow(DeleteRowRequest),
+        UpdateRow(UpdateRowRequest),
     }
 
     #[derive(Debug, Deserialize)]
@@ -233,6 +234,14 @@ mod requests {
         pub key: JsonValue,
         pub request_id: BoxStr,
     }
+
+    #[derive(Debug, Deserialize)]
+    pub struct UpdateRowRequest {
+        pub table: BoxStr,
+        pub key: JsonValue,
+        pub data: HashMap<BoxStr, JsonValue>,
+        pub request_id: BoxStr,
+    }
 }
 
 mod responses {
@@ -251,6 +260,7 @@ mod responses {
         GetRow(GetRowResponse),
         InsertRow(InsertRowResponse),
         DeleteRow(DeleteRowResponse),
+        UpdateRow(UpdateRowResponse),
     }
 
     #[derive(Debug, Serialize)]
@@ -278,6 +288,13 @@ mod responses {
     pub struct DeleteRowResponse {
         pub table: BoxStr,
         pub deleted_rows: usize,
+        pub request_id: BoxStr,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct UpdateRowResponse {
+        pub table: BoxStr,
+        pub updated_rows: usize,
         pub request_id: BoxStr,
     }
 
@@ -371,6 +388,13 @@ mod db {
             table_name: TableName,
             key: JsonValue,
         ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send;
+
+        fn update_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
+            data: HashMap<ColumnName, serde_json::Value>,
+        ) -> impl std::future::Future<Output = Result<Option<usize>, Self::Error>> + Send;
     }
 
     #[derive(Clone)]
@@ -709,6 +733,42 @@ mod db {
             .await
             .expect("failed to spawn a tokio task")
         }
+
+        async fn update_row(
+            &self,
+            table_name: TableName,
+            key: JsonValue,
+            data: HashMap<ColumnName, serde_json::Value>,
+        ) -> Result<Option<usize>, Self::Error> {
+            let ColumnName(primary_key) = self.get_primary_key(&table_name).await?;
+            let pool = self.pool.clone();
+
+            let result = tokio::task::spawn_blocking(move || -> Result<usize, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+
+                let updates = data
+                    .into_iter()
+                    .map(|(ColumnName(col), val)| (col, json_to_rusqlite(val)))
+                    .map(|(col, val)| (col, rusqlite_to_str(val)))
+                    .map(|(col, val)| format!("{col} = {val}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+
+                let TableName(table_name) = table_name;
+                let sql = format!("UPDATE {table_name} SET {updates} WHERE {primary_key} = ?");
+
+                let key = json_to_rusqlite(key);
+                conn.execute(&sql, [key])
+            })
+            .await
+            .expect("failed to spawn a tokio task");
+
+            match result {
+                Ok(row) => Ok(Some(row)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(err) => Err(err),
+            }
+        }
     }
 
     pub fn rusqlite_to_json(v: SqlValue) -> JsonValue {
@@ -768,6 +828,7 @@ mod app {
         requests::ApiRequest,
         responses::{
             ApiResponse, DeleteRowResponse, GetRowResponse, InsertRowResponse, ListRowsResponse,
+            UpdateRowResponse,
         },
         BoxList, BoxStr,
     };
@@ -935,6 +996,46 @@ mod app {
                         ApiResponse::DeleteRow(DeleteRowResponse {
                             table: req.table,
                             deleted_rows,
+                            request_id: req.request_id,
+                        })
+                    }
+                    ApiRequest::UpdateRow(req) => {
+                        let table_name = db.check_table_name(&req.table).await?.ok_or(
+                            Self::Error::TableNotFound {
+                                table: req.table.clone(),
+                            },
+                        )?;
+
+                        let columns: BoxList<_> = req.data.keys().map(|k| k.to_owned()).collect();
+
+                        let (found_columns, not_found_columns) =
+                            db.check_column_names(&table_name, &columns).await?;
+
+                        if !not_found_columns.is_empty() {
+                            return Err(Self::Error::ColumnsNotFound {
+                                columns: not_found_columns,
+                            });
+                        }
+
+                        let row: HashMap<_, _> = req
+                            .data
+                            .into_iter()
+                            .filter_map(|(key, value)| {
+                                found_columns
+                                    .iter()
+                                    .find(|col| *col.as_str() == *key)
+                                    .map(|col| (col.clone(), value))
+                            })
+                            .collect();
+
+                        let updated_rows = db
+                            .update_row(table_name, req.key, row)
+                            .await?
+                            .ok_or(Self::Error::RowNotFound)?;
+
+                        ApiResponse::UpdateRow(UpdateRowResponse {
+                            table: req.table,
+                            updated_rows,
                             request_id: req.request_id,
                         })
                     }
