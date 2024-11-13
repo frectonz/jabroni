@@ -2,6 +2,17 @@
 
 Jabroni let's you connect to your SQLite database over WebSockets and query your data. Jabroni also generates a type-safe typescript client library that provides an API similar to the browser's built in `fetch`.
 
+## Features
+
+- List rows in a table.
+- Select specific columns to be returned.
+- Paginate results by using a page number.
+- Batch insert rows.
+- Create, Read, Update and Delete a single rows.
+- Round robin connection pooling, to solve socket congestion.
+- Type safe client library.
+- All the benefits of a WebSocket connection.
+
 ## Usage
 
 Start a jabroni server
