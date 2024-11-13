@@ -37,13 +37,11 @@
           buildInputs = [
             pkgs.just
             pkgs.deno
-            pkgs.nodejs
             pkgs.bacon
             pkgs.openssl
             pkgs.pkg-config
             pkgs.rust-analyzer
             pkgs.rust-bin.stable.latest.default
-            pkgs.nodePackages.typescript-language-server
           ];
         };
       });
