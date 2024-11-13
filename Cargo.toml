@@ -24,3 +24,8 @@ tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
 tower = { version = "0.5.1", features = ["limit"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

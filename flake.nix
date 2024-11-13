@@ -39,6 +39,7 @@
             pkgs.deno
             pkgs.bacon
             pkgs.openssl
+            pkgs.cargo-dist
             pkgs.pkg-config
             pkgs.rust-analyzer
             pkgs.rust-bin.stable.latest.default
