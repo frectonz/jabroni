@@ -13,6 +13,11 @@ Jabroni let's you connect to your SQLite database over WebSockets and query your
 - Type safe client library.
 - All the benefits of a WebSocket connection.
 
+## Planned Features
+
+- [ ] Authorization using a JWT
+- [ ] Support for table joins
+
 ## Install
 
 ### Linux and MacOS
