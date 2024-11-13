@@ -398,6 +398,7 @@ mod db {
         Text,
         Blob,
     }
+    type SqlValueWithIsNull = (SqlValueType, bool);
 
     fn str_to_sql_value_type(s: BoxStr) -> SqlValueType {
         match s.as_ref() {
@@ -604,12 +605,12 @@ mod db {
         pub async fn get_column_types(
             &self,
             TableName(table_name): &TableName,
-        ) -> Result<BoxList<(ColumnName, (SqlValueType, bool))>, rusqlite::Error> {
+        ) -> Result<BoxList<(ColumnName, SqlValueWithIsNull)>, rusqlite::Error> {
             let pool = self.pool.clone();
             let sql = format!(r#"PRAGMA table_info({table_name})"#);
 
             tokio::task::spawn_blocking(
-                move || -> Result<BoxList<(ColumnName, (SqlValueType, bool))>, rusqlite::Error> {
+                move || -> Result<BoxList<(ColumnName, SqlValueWithIsNull)>, rusqlite::Error> {
                     let conn = pool.get().expect("failed to get a connection from pool");
                     let mut stmt = conn.prepare(&sql)?;
 
