@@ -1,4 +1,4 @@
-import { makeWebSocketFetch, nanoid, snapshotTest } from "./base.ts";
+import { makeWebSocketFetch, nanoid, snapshotTest } from "./wrapper.ts";
 
 const $fetch = await makeWebSocketFetch({
   url: "ws://127.0.0.1:3030",

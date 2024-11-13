@@ -617,7 +617,7 @@ mod db {
                         .query_map((), |r| {
                             Ok((
                                 ColumnName(r.get(1)?),
-                                (str_to_sql_value_type(r.get(2)?), r.get(3)?),
+                                (str_to_sql_value_type(r.get(2)?), r.get(3)? && !r.get(5)?),
                             ))
                         })?
                         .collect::<Result<_, _>>()?;
@@ -1406,15 +1406,15 @@ export const Pagination = z
         for (col, typ) in columns.iter() {
             let typ = match typ {
                 (SqlValueType::Null, true) => "z.null(),",
-                (SqlValueType::Null, false) => "z.null().nullable(),",
+                (SqlValueType::Null, false) => "z.null().nullable().optional(),",
                 (SqlValueType::Integer, true) => "z.number(),",
-                (SqlValueType::Integer, false) => "z.number().nullable(),",
+                (SqlValueType::Integer, false) => "z.number().nullable().optional(),",
                 (SqlValueType::Real, true) => "z.number(),",
-                (SqlValueType::Real, false) => "z.number().nullable(),",
+                (SqlValueType::Real, false) => "z.number().nullable().optional(),",
                 (SqlValueType::Text, true) => "z.string(),",
-                (SqlValueType::Text, false) => "z.string().nullable(),",
+                (SqlValueType::Text, false) => "z.string().nullable().optional(),",
                 (SqlValueType::Blob, true) => "z.string(),",
-                (SqlValueType::Blob, false) => "z.string().nullable(),",
+                (SqlValueType::Blob, false) => "z.string().nullable().optional(),",
             };
             writeln!(table_schema, "  {col}: {typ}")?;
         }
@@ -1424,16 +1424,11 @@ export const Pagination = z
         let mut table_schema = format!("export const {table}_schema_optional = z.object({{");
         for (col, typ) in columns {
             let typ = match typ {
-                (SqlValueType::Null, true) => "z.null().optional(),",
-                (SqlValueType::Null, false) => "z.null().optional().nullable(),",
-                (SqlValueType::Integer, true) => "z.number().optional(),",
-                (SqlValueType::Integer, false) => "z.number().optional().nullable(),",
-                (SqlValueType::Real, true) => "z.number().optional(),",
-                (SqlValueType::Real, false) => "z.number().optional().nullable(),",
-                (SqlValueType::Text, true) => "z.string().optional(),",
-                (SqlValueType::Text, false) => "z.string().optional().nullable(),",
-                (SqlValueType::Blob, true) => "z.string().optional(),",
-                (SqlValueType::Blob, false) => "z.string().optional().nullable(),",
+                (SqlValueType::Null, _) => "z.null().nullable().optional(),",
+                (SqlValueType::Integer, _) => "z.number().nullable().optional(),",
+                (SqlValueType::Real, _) => "z.number().nullable().optional(),",
+                (SqlValueType::Text, _) => "z.string().nullable().optional(),",
+                (SqlValueType::Blob, _) => "z.string().nullable().optional(),",
             };
             writeln!(table_schema, "  {col}: {typ}")?;
         }
@@ -1491,6 +1486,18 @@ export const {table}_get_row_request = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_insert_row_request = z.object({{
+  type: z.literal("InsertRow"),
+  table: z.literal('{table}'),
+  data: {table}_schema,
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_request = tables
@@ -1513,9 +1520,19 @@ export const {table}_get_row_request = z.object({{
         "export const GetRowRequest = z.discriminatedUnion('table', [{get_row_request}]);"
     )?;
 
+    let insert_row_request = tables
+        .iter()
+        .map(|table| format!("{table}_insert_row_request"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest]);"
+        "export const InsertRowRequest = z.discriminatedUnion('table', [{insert_row_request}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest, InsertRowRequest]);"
     )?;
 
     for table in tables.iter() {
@@ -1542,6 +1559,18 @@ export const {table}_get_row_response = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_insert_row_response = z.object({{
+  type: z.literal('InsertRow'),
+  table: z.literal('{table}'),
+  inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_response = tables
@@ -1564,9 +1593,19 @@ export const {table}_get_row_response = z.object({{
         "export const GetRowResponse = z.discriminatedUnion('table', [{get_row_response}]);"
     )?;
 
+    let insert_row_response = tables
+        .iter()
+        .map(|table| format!("{table}_insert_row_response"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse]);"
+        "export const InsertRowResponse = z.discriminatedUnion('table', [{insert_row_response}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse, InsertRowResponse]);"
     )?;
 
     writeln!(
