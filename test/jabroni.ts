@@ -255,6 +255,13 @@ export const albums_batch_insert_row_request = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const albums_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("albums"),
+  key: albums_primary_key,
+  request_id: z.string().default(() => nanoid()),
+});
+
 const artists_columns = z.union([z.literal("ArtistId"), z.literal("Name")]);
 
 export const artists_sort_options = z
@@ -291,6 +298,13 @@ export const artists_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("artists"),
   data: z.array(artists_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const artists_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("artists"),
+  key: artists_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -344,6 +358,13 @@ export const customers_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("customers"),
   data: z.array(customers_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const customers_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("customers"),
+  key: customers_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -402,6 +423,13 @@ export const employees_batch_insert_row_request = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const employees_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("employees"),
+  key: employees_primary_key,
+  request_id: z.string().default(() => nanoid()),
+});
+
 const genres_columns = z.union([z.literal("GenreId"), z.literal("Name")]);
 
 export const genres_sort_options = z
@@ -438,6 +466,13 @@ export const genres_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("genres"),
   data: z.array(genres_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const genres_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("genres"),
+  key: genres_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -490,6 +525,13 @@ export const invoices_batch_insert_row_request = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const invoices_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("invoices"),
+  key: invoices_primary_key,
+  request_id: z.string().default(() => nanoid()),
+});
+
 const invoice_items_columns = z.union([
   z.literal("InvoiceLineId"),
   z.literal("InvoiceId"),
@@ -535,6 +577,13 @@ export const invoice_items_batch_insert_row_request = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const invoice_items_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("invoice_items"),
+  key: invoice_items_primary_key,
+  request_id: z.string().default(() => nanoid()),
+});
+
 const media_types_columns = z.union([
   z.literal("MediaTypeId"),
   z.literal("Name"),
@@ -577,6 +626,13 @@ export const media_types_batch_insert_row_request = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const media_types_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("media_types"),
+  key: media_types_primary_key,
+  request_id: z.string().default(() => nanoid()),
+});
+
 const playlists_columns = z.union([z.literal("PlaylistId"), z.literal("Name")]);
 
 export const playlists_sort_options = z
@@ -613,6 +669,13 @@ export const playlists_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("playlists"),
   data: z.array(playlists_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const playlists_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("playlists"),
+  key: playlists_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -655,6 +718,13 @@ export const playlist_track_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("playlist_track"),
   data: z.array(playlist_track_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const playlist_track_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("playlist_track"),
+  key: playlist_track_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -704,6 +774,13 @@ export const tracks_batch_insert_row_request = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("tracks"),
   data: z.array(tracks_schema),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const tracks_delete_row_request = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("tracks"),
+  key: tracks_primary_key,
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -759,11 +836,25 @@ export const BatchInsertRowRequest = z.discriminatedUnion("table", [
   playlist_track_batch_insert_row_request,
   tracks_batch_insert_row_request,
 ]);
+export const DeleteRowRequest = z.discriminatedUnion("table", [
+  albums_delete_row_request,
+  artists_delete_row_request,
+  customers_delete_row_request,
+  employees_delete_row_request,
+  genres_delete_row_request,
+  invoices_delete_row_request,
+  invoice_items_delete_row_request,
+  media_types_delete_row_request,
+  playlists_delete_row_request,
+  playlist_track_delete_row_request,
+  tracks_delete_row_request,
+]);
 export const ApiRequest = z.union([
   ListRowsRequest,
   GetRowRequest,
   InsertRowRequest,
   BatchInsertRowRequest,
+  DeleteRowRequest,
 ]);
 
 export const albums_list_rows_response = z.object({
@@ -791,6 +882,13 @@ export const albums_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("albums"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const albums_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("albums"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -822,6 +920,13 @@ export const artists_batch_insert_row_response = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const artists_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("artists"),
+  deleted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const customers_list_rows_response = z.object({
   type: z.literal("ListRows"),
   table: z.literal("customers"),
@@ -847,6 +952,13 @@ export const customers_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("customers"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const customers_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("customers"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -878,6 +990,13 @@ export const employees_batch_insert_row_response = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const employees_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("employees"),
+  deleted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const genres_list_rows_response = z.object({
   type: z.literal("ListRows"),
   table: z.literal("genres"),
@@ -903,6 +1022,13 @@ export const genres_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("genres"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const genres_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("genres"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -934,6 +1060,13 @@ export const invoices_batch_insert_row_response = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const invoices_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("invoices"),
+  deleted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const invoice_items_list_rows_response = z.object({
   type: z.literal("ListRows"),
   table: z.literal("invoice_items"),
@@ -959,6 +1092,13 @@ export const invoice_items_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("invoice_items"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const invoice_items_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("invoice_items"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -990,6 +1130,13 @@ export const media_types_batch_insert_row_response = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const media_types_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("media_types"),
+  deleted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const playlists_list_rows_response = z.object({
   type: z.literal("ListRows"),
   table: z.literal("playlists"),
@@ -1015,6 +1162,13 @@ export const playlists_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("playlists"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const playlists_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("playlists"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -1046,6 +1200,13 @@ export const playlist_track_batch_insert_row_response = z.object({
   request_id: z.string().default(() => nanoid()),
 });
 
+export const playlist_track_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("playlist_track"),
+  deleted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
 export const tracks_list_rows_response = z.object({
   type: z.literal("ListRows"),
   table: z.literal("tracks"),
@@ -1071,6 +1232,13 @@ export const tracks_batch_insert_row_response = z.object({
   type: z.literal("BatchInsertRow"),
   table: z.literal("tracks"),
   inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+});
+
+export const tracks_delete_row_response = z.object({
+  type: z.literal("DeleteRow"),
+  table: z.literal("tracks"),
+  deleted_rows: z.number(),
   request_id: z.string().default(() => nanoid()),
 });
 
@@ -1126,11 +1294,25 @@ export const BatchInsertRowResponse = z.discriminatedUnion("table", [
   playlist_track_batch_insert_row_response,
   tracks_batch_insert_row_response,
 ]);
+export const DeleteRowResponse = z.discriminatedUnion("table", [
+  albums_delete_row_response,
+  artists_delete_row_response,
+  customers_delete_row_response,
+  employees_delete_row_response,
+  genres_delete_row_response,
+  invoices_delete_row_response,
+  invoice_items_delete_row_response,
+  media_types_delete_row_response,
+  playlists_delete_row_response,
+  playlist_track_delete_row_response,
+  tracks_delete_row_response,
+]);
 export const ApiResponse = z.union([
   ListRowsResponse,
   GetRowResponse,
   InsertRowResponse,
   BatchInsertRowResponse,
+  DeleteRowResponse,
 ]);
 
 export const ErrorMessage = z.object({
