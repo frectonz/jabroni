@@ -1498,6 +1498,25 @@ export const {table}_insert_row_request = z.object({{
 }});
 "#
         )?;
+
+        // export const BatchInsertRowRequest = z.object({
+        //   table: z.string(),
+        //   key: z.any(),
+        //   data: z.any(),
+        //   request_id: z.string().default(() => nanoid()),
+        // });
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_batch_insert_row_request = z.object({{
+  type: z.literal("BatchInsertRow"),
+  table: z.literal('{table}'),
+  data: z.array({table}_schema),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_request = tables
@@ -1530,9 +1549,19 @@ export const {table}_insert_row_request = z.object({{
         "export const InsertRowRequest = z.discriminatedUnion('table', [{insert_row_request}]);"
     )?;
 
+    let batch_insert_row_request = tables
+        .iter()
+        .map(|table| format!("{table}_batch_insert_row_request"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest, InsertRowRequest]);"
+        "export const BatchInsertRowRequest = z.discriminatedUnion('table', [{batch_insert_row_request}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest, InsertRowRequest, BatchInsertRowRequest]);"
     )?;
 
     for table in tables.iter() {
@@ -1571,6 +1600,18 @@ export const {table}_insert_row_response = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_batch_insert_row_response = z.object({{
+  type: z.literal('BatchInsertRow'),
+  table: z.literal('{table}'),
+  inserted_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_response = tables
@@ -1603,9 +1644,19 @@ export const {table}_insert_row_response = z.object({{
         "export const InsertRowResponse = z.discriminatedUnion('table', [{insert_row_response}]);"
     )?;
 
+    let batch_insert_row_response = tables
+        .iter()
+        .map(|table| format!("{table}_batch_insert_row_response"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse, InsertRowResponse]);"
+        "export const BatchInsertRowResponse = z.discriminatedUnion('table', [{batch_insert_row_response}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse, InsertRowResponse, BatchInsertRowResponse]);"
     )?;
 
     writeln!(
