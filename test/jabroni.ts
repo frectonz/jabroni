@@ -582,132 +582,154 @@ export const GetRowRequest = z.discriminatedUnion("table", [
 export const ApiRequest = z.union([ListRowsRequest, GetRowRequest]);
 
 export const albums_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("albums"),
   rows: z.array(albums_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const albums_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("albums"),
   row: albums_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const artists_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("artists"),
   rows: z.array(artists_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const artists_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("artists"),
   row: artists_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const customers_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("customers"),
   rows: z.array(customers_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const customers_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("customers"),
   row: customers_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const employees_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("employees"),
   rows: z.array(employees_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const employees_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("employees"),
   row: employees_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const genres_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("genres"),
   rows: z.array(genres_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const genres_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("genres"),
   row: genres_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const invoices_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("invoices"),
   rows: z.array(invoices_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const invoices_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("invoices"),
   row: invoices_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const invoice_items_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("invoice_items"),
   rows: z.array(invoice_items_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const invoice_items_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("invoice_items"),
   row: invoice_items_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const media_types_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("media_types"),
   rows: z.array(media_types_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const media_types_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("media_types"),
   row: media_types_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const playlists_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("playlists"),
   rows: z.array(playlists_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const playlists_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("playlists"),
   row: playlists_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const playlist_track_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("playlist_track"),
   rows: z.array(playlist_track_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const playlist_track_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("playlist_track"),
   row: playlist_track_schema_optional,
   request_id: z.string().default(() => nanoid()),
 });
 
 export const tracks_list_rows_response = z.object({
+  type: z.literal("ListRows"),
   table: z.literal("tracks"),
   rows: z.array(tracks_schema_optional),
   request_id: z.string().default(() => nanoid()),
 });
 
 export const tracks_get_row_response = z.object({
+  type: z.literal("GetRow"),
   table: z.literal("tracks"),
   row: tracks_schema_optional,
   request_id: z.string().default(() => nanoid()),

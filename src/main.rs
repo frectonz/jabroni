@@ -1523,6 +1523,7 @@ export const {table}_get_row_request = z.object({{
             schema,
             r#"
 export const {table}_list_rows_response = z.object({{
+  type: z.literal('ListRows'),
   table: z.literal('{table}'),
   rows: z.array({table}_schema_optional),
   request_id: z.string().default(() => nanoid()),
@@ -1534,6 +1535,7 @@ export const {table}_list_rows_response = z.object({{
             schema,
             r#"
 export const {table}_get_row_response = z.object({{
+  type: z.literal('GetRow'),
   table: z.literal('{table}'),
   row: {table}_schema_optional,
   request_id: z.string().default(() => nanoid()),
