@@ -1522,6 +1522,19 @@ export const {table}_delete_row_request = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_update_row_request = z.object({{
+  type: z.literal("UpdateRow"),
+  table: z.literal('{table}'),
+  key: {table}_primary_key,
+  data: {table}_schema_optional,
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_request = tables
@@ -1574,9 +1587,19 @@ export const {table}_delete_row_request = z.object({{
         "export const DeleteRowRequest = z.discriminatedUnion('table', [{delete_row_request}]);"
     )?;
 
+    let update_row_request = tables
+        .iter()
+        .map(|table| format!("{table}_update_row_request"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest, InsertRowRequest, BatchInsertRowRequest, DeleteRowRequest]);"
+        "export const UpdateRowRequest = z.discriminatedUnion('table', [{update_row_request}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest, InsertRowRequest, BatchInsertRowRequest, DeleteRowRequest, UpdateRowRequest]);"
     )?;
 
     for table in tables.iter() {
@@ -1639,6 +1662,18 @@ export const {table}_delete_row_response = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_update_row_response = z.object({{
+  type: z.literal('UpdateRow'),
+  table: z.literal('{table}'),
+  updated_rows: z.number(),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_response = tables
@@ -1691,9 +1726,19 @@ export const {table}_delete_row_response = z.object({{
         "export const DeleteRowResponse = z.discriminatedUnion('table', [{delete_row_response}]);"
     )?;
 
+    let update_row_response = tables
+        .iter()
+        .map(|table| format!("{table}_update_row_response"))
+        .collect::<Vec<_>>()
+        .join(",");
     writeln!(
         schema,
-        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse, InsertRowResponse, BatchInsertRowResponse, DeleteRowResponse]);"
+        "export const UpdateRowResponse = z.discriminatedUnion('table', [{update_row_response}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse, InsertRowResponse, BatchInsertRowResponse, DeleteRowResponse, UpdateRowResponse]);"
     )?;
 
     writeln!(

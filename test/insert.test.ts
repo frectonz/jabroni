@@ -50,7 +50,7 @@ Deno.test(
     type: "GetRow",
     table: "employees",
     key: 9,
-    select: ["city", "country"],
+    select: ["City", "Country"],
     request_id: nanoid(),
   }),
 );
