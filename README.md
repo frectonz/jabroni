@@ -13,6 +13,37 @@ Jabroni let's you connect to your SQLite database over WebSockets and query your
 - Type safe client library.
 - All the benefits of a WebSocket connection.
 
+## Install
+
+### Linux and MacOS
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/frectonz/jabroni/releases/download/0.1.0/jabroni-installer.sh | sh
+```
+
+### Windows
+
+```
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/frectonz/jabroni/releases/download/0.1.0/jabroni-installer.ps1 | iex"
+```
+
+### Nix
+
+```
+nix shell github:frectonz/jabroni
+```
+
+### Docker
+
+```
+docker run \
+  -e ADDRESS=0.0.0.0:4949 \
+  -e DATABASE=/data/sample.sqlite3 \
+  -v $(pwd)/sample.sqlite3:/data/sample.sqlite3 \
+  frectonz/jabroni \
+  serve
+```
+
 ## Usage
 
 Start a jabroni server

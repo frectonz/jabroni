@@ -47,7 +47,8 @@
         };
       });
 
-      packages = forAllSystems (pkgs:
+      packages = forAllSystems (
+        pkgs:
         let
           rustPlatform = pkgs.makeRustPlatform {
             cargo = pkgs.rust-bin.stable.latest.default;
@@ -56,7 +57,8 @@
 
           pname = "jabroni";
           version = "0.1.0";
-        in rec {
+        in
+        rec {
           default = rustPlatform.buildRustPackage {
             inherit pname version;
             src = ./.;
@@ -69,14 +71,16 @@
             name = pname;
             tag = "latest";
             created = "now";
-            config.Cmd = [ "${default}/bin/jabroni" ];
+            contents = [ default ];
+            config.ENTRYPOINT = [ "/bin/jabroni" ];
           };
 
           deploy = pkgs.writeShellScriptBin "deploy" ''
             ${pkgs.skopeo}/bin/skopeo --insecure-policy copy docker-archive:${image} docker://docker.io/frectonz/jabroni:${version} --dest-creds="frectonz:$ACCESS_TOKEN"
             ${pkgs.skopeo}/bin/skopeo --insecure-policy copy docker://docker.io/frectonz/jabroni:${version} docker://docker.io/frectonz/jabroni:latest --dest-creds="frectonz:$ACCESS_TOKEN"
           '';
-        });
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);
     };
