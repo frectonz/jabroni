@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "nanoid": "npm:nanoid@^5.0.8",
+    "zod": "npm:zod@^3.23.8"
+  }
+}

@@ -1375,8 +1375,8 @@ async fn generate_client(db: SqliteDatabase, out_path: BoxStr) -> color_eyre::Re
         .collect::<BoxList<_>>();
 
     let mut schema = r#"
-import { z } from "https://deno.land/x/zod@v3.23.8/mod.ts";
-import { nanoid } from "https://deno.land/x/nanoid@v3.0.0/mod.ts";
+import { z } from "zod";
+import { nanoid } from "nanoid";
 
 export const Pagination = z
   .object({
