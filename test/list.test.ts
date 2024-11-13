@@ -1,4 +1,4 @@
-import { makeWebSocketFetch, nanoid, snapshotTest } from "./base.ts";
+import { makeWebSocketFetch, nanoid, snapshotTest } from "./wrapper.ts";
 
 const $fetch = await makeWebSocketFetch({
   url: "ws://127.0.0.1:3030",
@@ -30,6 +30,7 @@ Deno.test(
   snapshotTest($fetch, {
     type: "ListRows",
     table: "employees",
+    // @ts-ignore: type safety will not let us do this
     select: ["FirstName", "cat", "dog"],
     request_id: nanoid(),
   }),
@@ -52,6 +53,7 @@ Deno.test(
     type: "ListRows",
     table: "employees",
     select: ["FirstName", "EmployeeId"],
+    // @ts-ignore: type safety will not let us do this
     sort: { column: "FullName", order: "Asc" },
     request_id: nanoid(),
   }),

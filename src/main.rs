@@ -384,6 +384,13 @@ mod db {
         }
     }
 
+    impl TableName {
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    #[derive(Debug, Clone)]
     pub enum SqlValueType {
         Null,
         Integer,
@@ -563,6 +570,32 @@ mod db {
                     .expect("no column found at primary key index");
 
                 Ok(ColumnName(primary_key.clone()))
+            })
+            .await
+            .expect("failed to spawn a tokio task")
+        }
+
+        pub async fn get_primary_key_type(
+            &self,
+            TableName(table_name): &TableName,
+        ) -> Result<SqlValueType, rusqlite::Error> {
+            let pool = self.pool.clone();
+            let sql = format!(r#"PRAGMA table_info({table_name})"#);
+
+            tokio::task::spawn_blocking(move || -> Result<SqlValueType, rusqlite::Error> {
+                let conn = pool.get().expect("failed to get a connection from pool");
+                let mut stmt = conn.prepare(&sql)?;
+
+                let primary_keys: BoxList<(SqlValueType, bool)> = stmt
+                    .query_map((), |r| Ok((str_to_sql_value_type(r.get(2)?), r.get(5)?)))?
+                    .collect::<Result<_, _>>()?;
+
+                let primary_key_type = primary_keys
+                    .iter()
+                    .find_map(|(t, pk)| if *pk { Some(t) } else { None })
+                    .expect("no column found at primary key index");
+
+                Ok(primary_key_type.clone())
             })
             .await
             .expect("failed to spawn a tokio task")
@@ -1332,6 +1365,10 @@ async fn generate_client(db: SqliteDatabase, out_path: BoxStr) -> color_eyre::Re
     tracing::info!("generating client library");
 
     let tables = db.get_tables().await.context("failed to fetch tables")?;
+    let tables = tables
+        .iter()
+        .filter(|t| !t.as_str().starts_with("sqlite_"))
+        .collect::<BoxList<_>>();
 
     let mut schema = r#"
 import { z } from "https://deno.land/x/zod@v3.23.8/mod.ts";
@@ -1343,7 +1380,53 @@ export const Pagination = z
     size: z.number(),
   });
 
-"#.to_string();
+"#
+    .to_string();
+
+    for table in tables.iter() {
+        let columns = db.get_column_types(table).await?;
+
+        let primary_key_type = db.get_primary_key_type(table).await?;
+        let primary_key_type_schema = match primary_key_type {
+            db::SqlValueType::Null => format!("export const {table}_primary_key = z.null();"),
+            db::SqlValueType::Integer | db::SqlValueType::Real => {
+                format!("export const {table}_primary_key = z.number();")
+            }
+            db::SqlValueType::Text | db::SqlValueType::Blob => {
+                format!("export const {table}_primary_key = z.string();")
+            }
+        };
+
+        writeln!(schema, "{primary_key_type_schema}")?;
+
+        let mut table_schema = format!("export const {table}_schema = z.object({{");
+        for (col, typ) in columns.iter() {
+            let typ = match typ {
+                db::SqlValueType::Null => "z.null(),",
+                db::SqlValueType::Integer => "z.number(),",
+                db::SqlValueType::Real => "z.number(),",
+                db::SqlValueType::Text => "z.string(),",
+                db::SqlValueType::Blob => "z.string(),",
+            };
+            writeln!(table_schema, "  {col}: {typ}")?;
+        }
+        writeln!(table_schema, "}});")?;
+
+        let mut table_schema = format!("export const {table}_schema_optional = z.object({{");
+        for (col, typ) in columns {
+            let typ = match typ {
+                db::SqlValueType::Null => "z.null().optional(),",
+                db::SqlValueType::Integer => "z.number().optional(),",
+                db::SqlValueType::Real => "z.number().optional(),",
+                db::SqlValueType::Text => "z.string().optional(),",
+                db::SqlValueType::Blob => "z.string().optional(),",
+            };
+            writeln!(table_schema, "  {col}: {typ}")?;
+        }
+        writeln!(table_schema, "}});")?;
+
+        writeln!(schema, "{table_schema}")?;
+    }
 
     for table in tables.iter() {
         let columns = db.get_columns(table).await?;
@@ -1382,6 +1465,19 @@ export const {table}_list_rows_request = z.object({{
 }});
 "#
         )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_get_row_request = z.object({{
+  type: z.literal("GetRow"),
+  table: z.literal('{table}'),
+  key: {table}_primary_key,
+  select: z.array({table}_columns).default([]),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
     }
 
     let list_rows_request = tables
@@ -1394,45 +1490,39 @@ export const {table}_list_rows_request = z.object({{
         "export const ListRowsRequest = z.discriminatedUnion('table', [{list_rows_request}]);"
     )?;
 
-    writeln!(schema, "export const ApiRequest = ListRowsRequest;")?;
+    let get_row_request = tables
+        .iter()
+        .map(|table| format!("{table}_get_row_request"))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(
+        schema,
+        "export const GetRowRequest = z.discriminatedUnion('table', [{get_row_request}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiRequest = z.union([ListRowsRequest, GetRowRequest]);"
+    )?;
 
     for table in tables.iter() {
-        let columns = db.get_column_types(table).await?;
-
-        let mut table_schema = format!("export const {table}_schema = z.object({{");
-        for (col, typ) in columns.iter() {
-            let typ = match typ {
-                db::SqlValueType::Null => "z.null(),",
-                db::SqlValueType::Integer => "z.number(),",
-                db::SqlValueType::Real => "z.number(),",
-                db::SqlValueType::Text => "z.string(),",
-                db::SqlValueType::Blob => "z.string(),",
-            };
-            writeln!(table_schema, "  {col}: {typ}")?;
-        }
-        writeln!(table_schema, "}});")?;
-
-        let mut table_schema = format!("export const {table}_schema_optional = z.object({{");
-        for (col, typ) in columns {
-            let typ = match typ {
-                db::SqlValueType::Null => "z.null().optional(),",
-                db::SqlValueType::Integer => "z.number().optional(),",
-                db::SqlValueType::Real => "z.number().optional(),",
-                db::SqlValueType::Text => "z.string().optional(),",
-                db::SqlValueType::Blob => "z.string().optional(),",
-            };
-            writeln!(table_schema, "  {col}: {typ}")?;
-        }
-        writeln!(table_schema, "}});")?;
-
-        writeln!(schema, "{table_schema}")?;
-
         writeln!(
             schema,
             r#"
 export const {table}_list_rows_response = z.object({{
   table: z.literal('{table}'),
   rows: z.array({table}_schema_optional),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_get_row_response = z.object({{
+  table: z.literal('{table}'),
+  row: {table}_schema_optional,
   request_id: z.string().default(() => nanoid()),
 }});
 "#
@@ -1449,7 +1539,20 @@ export const {table}_list_rows_response = z.object({{
         "export const ListRowsResponse = z.discriminatedUnion('table', [{list_rows_response}]);"
     )?;
 
-    writeln!(schema, "export const ApiResponse = ListRowsResponse;")?;
+    let get_row_response = tables
+        .iter()
+        .map(|table| format!("{table}_get_row_response"))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(
+        schema,
+        "export const GetRowResponse = z.discriminatedUnion('table', [{get_row_response}]);"
+    )?;
+
+    writeln!(
+        schema,
+        "export const ApiResponse = z.union([ListRowsResponse, GetRowResponse]);"
+    )?;
 
     writeln!(
         schema,
