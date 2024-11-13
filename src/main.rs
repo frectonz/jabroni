@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use app::App;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use db::SqliteDatabase;
 use futures::{future::poll_fn, SinkExt, StreamExt};
 use responses::ErrorResponse;
@@ -24,9 +24,24 @@ struct Args {
     #[arg(env)]
     database: BoxStr,
 
-    /// The address to bind to.
-    #[arg(short, long, env, default_value = "127.0.0.1:3030")]
-    address: BoxStr,
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Start thw WebSocket server.
+    Serve {
+        /// The address to bind to.
+        #[arg(short, long, env, default_value = "127.0.0.1:3030")]
+        address: BoxStr,
+    },
+    /// Generate client library.
+    Generate {
+        /// The output path for the generated client.
+        #[arg(short, long, env, default_value = "jabroni.ts")]
+        out_path: BoxStr,
+    },
 }
 
 #[tokio::main]
@@ -41,16 +56,22 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let args = Args::parse();
+
     let db = SqliteDatabase::new(args.database).await?;
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("shutting down gracefully due to CTRL+C signal");
+    match args.command {
+        Command::Serve { address } => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("shutting down gracefully due to CTRL+C signal");
+                }
+                _ = start(&address, db) => {
+                    tracing::error!("server exited");
+                }
+            }
         }
-        _ = start(&args.address, db) => {
-            tracing::error!("server exited");
-        }
-    }
+        Command::Generate { out_path } => generate_client(db, out_path).await?,
+    };
 
     Ok(())
 }
@@ -327,7 +348,7 @@ mod responses {
 }
 
 mod db {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fmt::Display};
 
     use r2d2::Pool;
     use r2d2_sqlite::{rusqlite, SqliteConnectionManager};
@@ -345,13 +366,44 @@ mod db {
     pub struct ColumnName(BoxStr);
     pub type Columns = Vec<ColumnName>;
 
+    impl Display for TableName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl Display for ColumnName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
     impl ColumnName {
         pub fn as_str(&self) -> &str {
             &self.0
         }
     }
 
-    pub trait Database: Clone + Send {
+    pub enum SqlValueType {
+        Null,
+        Integer,
+        Real,
+        Text,
+        Blob,
+    }
+
+    fn str_to_sql_value_type(s: BoxStr) -> SqlValueType {
+        match s.as_ref() {
+            "NULL" => SqlValueType::Null,
+            "INTEGER" => SqlValueType::Integer,
+            "REAL" => SqlValueType::Real,
+            "TEXT" => SqlValueType::Text,
+            "BLOB" => SqlValueType::Blob,
+            _ => SqlValueType::Text,
+        }
+    }
+
+    pub trait Database: Clone + Send + 'static {
         type Error: std::error::Error;
 
         fn check_table_name(
@@ -451,22 +503,23 @@ mod db {
             Ok(Self { pool })
         }
 
-        async fn get_tables(&self) -> Result<BoxList<BoxStr>, rusqlite::Error> {
+        pub async fn get_tables(&self) -> Result<BoxList<TableName>, rusqlite::Error> {
             let pool = self.pool.clone();
-            tokio::task::spawn_blocking(move || -> Result<BoxList<BoxStr>, rusqlite::Error> {
+            tokio::task::spawn_blocking(move || -> Result<BoxList<TableName>, rusqlite::Error> {
                 let conn = pool.get().expect("failed to get a connection from pool");
 
                 let rows = conn
                     .prepare(r#"SELECT name FROM sqlite_master WHERE type = "table""#)?
-                    .query_map((), |r| r.get::<_, BoxStr>(0))?
+                    .query_map((), |r| r.get::<_, BoxStr>(0).map(TableName))?
                     .collect::<Result<BoxList<_>, _>>()?;
+
                 Ok(rows)
             })
             .await
             .expect("failed to spawn a tokio task")
         }
 
-        async fn get_columns(
+        pub async fn get_columns(
             &self,
             TableName(table_name): &TableName,
         ) -> Result<BoxList<BoxStr>, rusqlite::Error> {
@@ -489,7 +542,7 @@ mod db {
             .expect("failed to spawn a tokio task")
         }
 
-        async fn get_primary_key(
+        pub async fn get_primary_key(
             &self,
             TableName(table_name): &TableName,
         ) -> Result<ColumnName, rusqlite::Error> {
@@ -514,6 +567,31 @@ mod db {
             .await
             .expect("failed to spawn a tokio task")
         }
+
+        pub async fn get_column_types(
+            &self,
+            TableName(table_name): &TableName,
+        ) -> Result<BoxList<(ColumnName, SqlValueType)>, rusqlite::Error> {
+            let pool = self.pool.clone();
+            let sql = format!(r#"PRAGMA table_info({table_name})"#);
+
+            tokio::task::spawn_blocking(
+                move || -> Result<BoxList<(ColumnName, SqlValueType)>, rusqlite::Error> {
+                    let conn = pool.get().expect("failed to get a connection from pool");
+                    let mut stmt = conn.prepare(&sql)?;
+
+                    let columns = stmt
+                        .query_map((), |r| {
+                            Ok((ColumnName(r.get(1)?), str_to_sql_value_type(r.get(2)?)))
+                        })?
+                        .collect::<Result<_, _>>()?;
+
+                    Ok(columns)
+                },
+            )
+            .await
+            .expect("failed to spawn a tokio task")
+        }
     }
 
     impl Database for SqliteDatabase {
@@ -524,7 +602,7 @@ mod db {
             table_name: &str,
         ) -> Result<Option<TableName>, Self::Error> {
             let table_name = table_name.to_lowercase();
-            for table in self.get_tables().await? {
+            for TableName(table) in self.get_tables().await? {
                 if table.to_lowercase() == table_name {
                     return Ok(Some(TableName(table)));
                 }
@@ -923,7 +1001,7 @@ mod app {
 
     impl<DB> Service<ApiRequest> for App<DB>
     where
-        DB: Database + 'static,
+        DB: Database,
         AppError<DB::Error>: From<DB::Error>,
     {
         type Response = ApiResponse;
@@ -1245,4 +1323,245 @@ mod websocket {
             WebSocketAdapter::new(inner)
         }
     }
+}
+
+async fn generate_client(db: SqliteDatabase, out_path: BoxStr) -> color_eyre::Result<()> {
+    use color_eyre::eyre::Context;
+    use std::fmt::Write;
+
+    tracing::info!("generating client library");
+
+    let tables = db.get_tables().await.context("failed to fetch tables")?;
+
+    let mut schema = r#"
+import { z } from "https://deno.land/x/zod@v3.23.8/mod.ts";
+import { nanoid } from "https://deno.land/x/nanoid@v3.0.0/mod.ts";
+
+export const Pagination = z
+  .object({
+    number: z.number(),
+    size: z.number(),
+  });
+
+"#.to_string();
+
+    for table in tables.iter() {
+        let columns = db.get_columns(table).await?;
+
+        let columns_schema = columns
+            .iter()
+            .map(|col| format!("z.literal('{col}')"))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(
+            schema,
+            "const {table}_columns = z.union([{columns_schema}]);"
+        )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_sort_options = z
+  .object({{
+    column: {table}_columns,
+    order: z.enum(["Asc", "Desc"]),
+  }});
+"#
+        )?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_list_rows_request = z.object({{
+  type: z.literal("ListRows"),
+  table: z.literal('{table}'),
+  select: z.array({table}_columns).default([]),
+  sort: {table}_sort_options.optional(),
+  page: Pagination.optional(),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
+    }
+
+    let list_rows_request = tables
+        .iter()
+        .map(|table| format!("{table}_list_rows_request"))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(
+        schema,
+        "export const ListRowsRequest = z.discriminatedUnion('table', [{list_rows_request}]);"
+    )?;
+
+    writeln!(schema, "export const ApiRequest = ListRowsRequest;")?;
+
+    for table in tables.iter() {
+        let columns = db.get_column_types(table).await?;
+
+        let mut table_schema = format!("export const {table}_schema = z.object({{");
+        for (col, typ) in columns.iter() {
+            let typ = match typ {
+                db::SqlValueType::Null => "z.null(),",
+                db::SqlValueType::Integer => "z.number(),",
+                db::SqlValueType::Real => "z.number(),",
+                db::SqlValueType::Text => "z.string(),",
+                db::SqlValueType::Blob => "z.string(),",
+            };
+            writeln!(table_schema, "  {col}: {typ}")?;
+        }
+        writeln!(table_schema, "}});")?;
+
+        let mut table_schema = format!("export const {table}_schema_optional = z.object({{");
+        for (col, typ) in columns {
+            let typ = match typ {
+                db::SqlValueType::Null => "z.null().optional(),",
+                db::SqlValueType::Integer => "z.number().optional(),",
+                db::SqlValueType::Real => "z.number().optional(),",
+                db::SqlValueType::Text => "z.string().optional(),",
+                db::SqlValueType::Blob => "z.string().optional(),",
+            };
+            writeln!(table_schema, "  {col}: {typ}")?;
+        }
+        writeln!(table_schema, "}});")?;
+
+        writeln!(schema, "{table_schema}")?;
+
+        writeln!(
+            schema,
+            r#"
+export const {table}_list_rows_response = z.object({{
+  table: z.literal('{table}'),
+  rows: z.array({table}_schema_optional),
+  request_id: z.string().default(() => nanoid()),
+}});
+"#
+        )?;
+    }
+
+    let list_rows_response = tables
+        .iter()
+        .map(|table| format!("{table}_list_rows_response"))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(
+        schema,
+        "export const ListRowsResponse = z.discriminatedUnion('table', [{list_rows_response}]);"
+    )?;
+
+    writeln!(schema, "export const ApiResponse = ListRowsResponse;")?;
+
+    writeln!(
+        schema,
+        r#"
+export const ErrorMessage = z.object({{
+  message: z.string(),
+}});
+
+export const TableNotFound = z.object({{
+  table: z.string(),
+}});
+
+export const ColumnsNotFound = z.object({{
+  columns: z.array(z.string()),
+}});
+
+export const SortColumnNotFound = z.object({{
+  column: z.string(),
+}});
+
+export const ErrorResponse = z.discriminatedUnion("type", [
+  z.object({{ type: z.literal("BadRequest"), ...ErrorMessage.shape }}),
+  z.object({{ type: z.literal("NonTextMessage") }}),
+  z.object({{ type: z.literal("TableNotFound"), ...TableNotFound.shape }}),
+  z.object({{ type: z.literal("ColumnsNotFound"), ...ColumnsNotFound.shape }}),
+  z.object({{
+    type: z.literal("SortColumnNotFound"),
+    ...SortColumnNotFound.shape,
+  }}),
+  z.object({{ type: z.literal("PageNumberCanNotBeZero") }}),
+  z.object({{ type: z.literal("RowNotFound") }}),
+  z.object({{ type: z.literal("DatabaseError") }}),
+]);
+
+export type MakeFetchOptions = {{
+  url: string;
+  connectionCount: number;
+}};
+
+export type Request = z.infer<typeof ApiRequest>;
+export type Response =
+  | {{ data: z.infer<typeof ApiResponse> }}
+  | {{ error: z.infer<typeof ErrorResponse> }};
+
+export async function makeWebSocketFetch(
+  {{ url, connectionCount }}: MakeFetchOptions,
+) {{
+  let sockets: WebSocket[] = [];
+  let connectionIndex = 0;
+  const openPromises: (Promise<void>)[] = [];
+
+  sockets = new Array(connectionCount).fill(0).map((_, i) => {{
+    const socket = new WebSocket(url);
+
+    openPromises.push(
+      new Promise((res) => {{
+        socket.onopen = () => {{
+          res();
+        }};
+      }}),
+    );
+
+    socket.onclose = () => console.log(i, "WebSocket disconnected");
+    socket.onerror = (error) => console.error(i, "WebSocket error:", error);
+
+    return socket;
+  }});
+
+  await Promise.all(openPromises);
+
+  function getWebSocket(): WebSocket {{
+    if (sockets.length === 0) {{
+      throw new Error(
+        "WebSocket pool is not initialized.",
+      );
+    }}
+
+    const socket = sockets[connectionIndex];
+    connectionIndex = (connectionIndex + 1) % sockets.length;
+    return socket;
+  }}
+
+  function $fetch(request: Request): Promise<Response> {{
+    const socket = getWebSocket();
+    const request_id = request.request_id;
+
+    const promise = new Promise<Response>((resolve) => {{
+      function handleMessage(event: MessageEvent<string>) {{
+        const error = ErrorResponse.safeParse(JSON.parse(event.data));
+        if (error.data) {{
+          socket.removeEventListener("message", handleMessage);
+          return resolve({{ error: error.data }});
+        }}
+
+        const resp = ApiResponse.parse(JSON.parse(event.data));
+        socket.removeEventListener("message", handleMessage);
+        return resolve({{ data: resp }});
+      }}
+
+      socket.addEventListener("message", handleMessage);
+    }});
+
+    socket.send(JSON.stringify({{ ...request, request_id }}));
+    return promise;
+  }}
+
+  return $fetch;
+}}
+"#
+    )?;
+
+    std::fs::write(out_path.as_ref(), schema)?;
+    tracing::info!("client library generated at {out_path}");
+    Ok(())
 }

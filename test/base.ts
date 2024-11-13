@@ -5,51 +5,53 @@ import { assertSnapshot } from "https://deno.land/std@0.224.0/testing/snapshot.t
 
 export { assertEquals, assertSnapshot, nanoid };
 
-const ListRowsRequest = z.object({
+export const SortOptions = z
+  .object({
+    column: z.string(),
+    order: z.enum(["Asc", "Desc"]),
+  });
+
+export const Pagination = z
+  .object({
+    number: z.number(),
+    size: z.number(),
+  });
+
+export const ListRowsRequest = z.object({
   table: z.string(),
   select: z.array(z.string()).default([]),
-  sort: z
-    .object({
-      column: z.string(),
-      order: z.enum(["Asc", "Desc"]),
-    })
-    .optional(),
-  page: z
-    .object({
-      number: z.number(),
-      size: z.number(),
-    })
-    .optional(),
+  sort: SortOptions.optional(),
+  page: Pagination.optional(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const GetRowRequest = z.object({
+export const GetRowRequest = z.object({
   table: z.string(),
   key: z.any(),
   select: z.array(z.string()).default([]),
   request_id: z.string().default(() => nanoid()),
 });
 
-const InsertRowRequest = z.object({
+export const InsertRowRequest = z.object({
   table: z.string(),
   data: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const DeleteRowRequest = z.object({
+export const DeleteRowRequest = z.object({
   table: z.string(),
   key: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const UpdateRowRequest = z.object({
+export const UpdateRowRequest = z.object({
   table: z.string(),
   key: z.any(),
   data: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const BatchInsertRowRequest = z.object({
+export const BatchInsertRowRequest = z.object({
   table: z.string(),
   key: z.any(),
   data: z.any(),
@@ -68,31 +70,31 @@ export const ApiRequest = z.discriminatedUnion("type", [
   }),
 ]);
 
-const ListRowsResponse = z.object({
+export const ListRowsResponse = z.object({
   table: z.string(),
   rows: z.array(z.any()),
   request_id: z.string().default(() => nanoid()),
 });
 
-const GetRowResponse = z.object({
+export const GetRowResponse = z.object({
   table: z.string(),
   row: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const InsertRowResponse = z.object({
+export const InsertRowResponse = z.object({
   table: z.string(),
   inserted_rows: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const DeleteRowResponse = z.object({
+export const DeleteRowResponse = z.object({
   table: z.string(),
   deleted_rows: z.any(),
   request_id: z.string().default(() => nanoid()),
 });
 
-const UpdateRowResponse = z.object({
+export const UpdateRowResponse = z.object({
   table: z.string(),
   updated_rows: z.any(),
   request_id: z.string().default(() => nanoid()),
@@ -107,19 +109,19 @@ export const ApiResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("BatchInsertRow"), ...InsertRowResponse.shape }),
 ]);
 
-const ErrorMessage = z.object({
+export const ErrorMessage = z.object({
   message: z.string(),
 });
 
-const TableNotFound = z.object({
+export const TableNotFound = z.object({
   table: z.string(),
 });
 
-const ColumnsNotFound = z.object({
+export const ColumnsNotFound = z.object({
   columns: z.array(z.string()),
 });
 
-const SortColumnNotFound = z.object({
+export const SortColumnNotFound = z.object({
   column: z.string(),
 });
 
@@ -137,13 +139,13 @@ export const ErrorResponse = z.discriminatedUnion("type", [
   z.object({ type: z.literal("DatabaseError") }),
 ]);
 
-type MakeFetchOptions = {
+export type MakeFetchOptions = {
   url: string;
   connectionCount: number;
 };
 
-type Request = z.infer<typeof ApiRequest>;
-type Response =
+export type Request = z.infer<typeof ApiRequest>;
+export type Response =
   | { data: z.infer<typeof ApiResponse> }
   | { error: z.infer<typeof ErrorResponse> };
 
@@ -176,7 +178,7 @@ export async function makeWebSocketFetch(
   function getWebSocket(): WebSocket {
     if (sockets.length === 0) {
       throw new Error(
-        "WebSocket pool is not initialized. Call initWebSocketPool first.",
+        "WebSocket pool is not initialized.",
       );
     }
 
