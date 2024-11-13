@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use app::App;
 use clap::{Parser, Subcommand};
-use db::SqliteDatabase;
+use db::{SqlValueType, SqliteDatabase};
 use futures::{future::poll_fn, SinkExt, StreamExt};
 use responses::ErrorResponse;
 use tokio::{
@@ -604,18 +604,21 @@ mod db {
         pub async fn get_column_types(
             &self,
             TableName(table_name): &TableName,
-        ) -> Result<BoxList<(ColumnName, SqlValueType)>, rusqlite::Error> {
+        ) -> Result<BoxList<(ColumnName, (SqlValueType, bool))>, rusqlite::Error> {
             let pool = self.pool.clone();
             let sql = format!(r#"PRAGMA table_info({table_name})"#);
 
             tokio::task::spawn_blocking(
-                move || -> Result<BoxList<(ColumnName, SqlValueType)>, rusqlite::Error> {
+                move || -> Result<BoxList<(ColumnName, (SqlValueType, bool))>, rusqlite::Error> {
                     let conn = pool.get().expect("failed to get a connection from pool");
                     let mut stmt = conn.prepare(&sql)?;
 
                     let columns = stmt
                         .query_map((), |r| {
-                            Ok((ColumnName(r.get(1)?), str_to_sql_value_type(r.get(2)?)))
+                            Ok((
+                                ColumnName(r.get(1)?),
+                                (str_to_sql_value_type(r.get(2)?), r.get(3)?),
+                            ))
                         })?
                         .collect::<Result<_, _>>()?;
 
@@ -1384,8 +1387,6 @@ export const Pagination = z
     .to_string();
 
     for table in tables.iter() {
-        let columns = db.get_column_types(table).await?;
-
         let primary_key_type = db.get_primary_key_type(table).await?;
         let primary_key_type_schema = match primary_key_type {
             db::SqlValueType::Null => format!("export const {table}_primary_key = z.null();"),
@@ -1399,32 +1400,44 @@ export const Pagination = z
 
         writeln!(schema, "{primary_key_type_schema}")?;
 
+        let columns = db.get_column_types(table).await?;
+
         let mut table_schema = format!("export const {table}_schema = z.object({{");
         for (col, typ) in columns.iter() {
             let typ = match typ {
-                db::SqlValueType::Null => "z.null(),",
-                db::SqlValueType::Integer => "z.number(),",
-                db::SqlValueType::Real => "z.number(),",
-                db::SqlValueType::Text => "z.string(),",
-                db::SqlValueType::Blob => "z.string(),",
+                (SqlValueType::Null, true) => "z.null(),",
+                (SqlValueType::Null, false) => "z.null().nullable(),",
+                (SqlValueType::Integer, true) => "z.number(),",
+                (SqlValueType::Integer, false) => "z.number().nullable(),",
+                (SqlValueType::Real, true) => "z.number(),",
+                (SqlValueType::Real, false) => "z.number().nullable(),",
+                (SqlValueType::Text, true) => "z.string(),",
+                (SqlValueType::Text, false) => "z.string().nullable(),",
+                (SqlValueType::Blob, true) => "z.string(),",
+                (SqlValueType::Blob, false) => "z.string().nullable(),",
             };
             writeln!(table_schema, "  {col}: {typ}")?;
         }
         writeln!(table_schema, "}});")?;
+        writeln!(schema, "{table_schema}")?;
 
         let mut table_schema = format!("export const {table}_schema_optional = z.object({{");
         for (col, typ) in columns {
             let typ = match typ {
-                db::SqlValueType::Null => "z.null().optional(),",
-                db::SqlValueType::Integer => "z.number().optional(),",
-                db::SqlValueType::Real => "z.number().optional(),",
-                db::SqlValueType::Text => "z.string().optional(),",
-                db::SqlValueType::Blob => "z.string().optional(),",
+                (SqlValueType::Null, true) => "z.null().optional(),",
+                (SqlValueType::Null, false) => "z.null().optional().nullable(),",
+                (SqlValueType::Integer, true) => "z.number().optional(),",
+                (SqlValueType::Integer, false) => "z.number().optional().nullable(),",
+                (SqlValueType::Real, true) => "z.number().optional(),",
+                (SqlValueType::Real, false) => "z.number().optional().nullable(),",
+                (SqlValueType::Text, true) => "z.string().optional(),",
+                (SqlValueType::Text, false) => "z.string().optional().nullable(),",
+                (SqlValueType::Blob, true) => "z.string().optional(),",
+                (SqlValueType::Blob, false) => "z.string().optional().nullable(),",
             };
             writeln!(table_schema, "  {col}: {typ}")?;
         }
         writeln!(table_schema, "}});")?;
-
         writeln!(schema, "{table_schema}")?;
     }
 

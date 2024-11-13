@@ -8,6 +8,12 @@ export const Pagination = z
   });
 
 export const albums_primary_key = z.number();
+export const albums_schema = z.object({
+  AlbumId: z.number(),
+  Title: z.string(),
+  ArtistId: z.number(),
+});
+
 export const albums_schema_optional = z.object({
   AlbumId: z.number().optional(),
   Title: z.string().optional(),
@@ -15,67 +21,131 @@ export const albums_schema_optional = z.object({
 });
 
 export const artists_primary_key = z.number();
+export const artists_schema = z.object({
+  ArtistId: z.number(),
+  Name: z.string().nullable(),
+});
+
 export const artists_schema_optional = z.object({
   ArtistId: z.number().optional(),
-  Name: z.string().optional(),
+  Name: z.string().optional().nullable(),
 });
 
 export const customers_primary_key = z.number();
+export const customers_schema = z.object({
+  CustomerId: z.number(),
+  FirstName: z.string(),
+  LastName: z.string(),
+  Company: z.string().nullable(),
+  Address: z.string().nullable(),
+  City: z.string().nullable(),
+  State: z.string().nullable(),
+  Country: z.string().nullable(),
+  PostalCode: z.string().nullable(),
+  Phone: z.string().nullable(),
+  Fax: z.string().nullable(),
+  Email: z.string(),
+  SupportRepId: z.number().nullable(),
+});
+
 export const customers_schema_optional = z.object({
   CustomerId: z.number().optional(),
   FirstName: z.string().optional(),
   LastName: z.string().optional(),
-  Company: z.string().optional(),
-  Address: z.string().optional(),
-  City: z.string().optional(),
-  State: z.string().optional(),
-  Country: z.string().optional(),
-  PostalCode: z.string().optional(),
-  Phone: z.string().optional(),
-  Fax: z.string().optional(),
+  Company: z.string().optional().nullable(),
+  Address: z.string().optional().nullable(),
+  City: z.string().optional().nullable(),
+  State: z.string().optional().nullable(),
+  Country: z.string().optional().nullable(),
+  PostalCode: z.string().optional().nullable(),
+  Phone: z.string().optional().nullable(),
+  Fax: z.string().optional().nullable(),
   Email: z.string().optional(),
-  SupportRepId: z.number().optional(),
+  SupportRepId: z.number().optional().nullable(),
 });
 
 export const employees_primary_key = z.number();
+export const employees_schema = z.object({
+  EmployeeId: z.number(),
+  LastName: z.string(),
+  FirstName: z.string(),
+  Title: z.string().nullable(),
+  ReportsTo: z.number().nullable(),
+  BirthDate: z.string().nullable(),
+  HireDate: z.string().nullable(),
+  Address: z.string().nullable(),
+  City: z.string().nullable(),
+  State: z.string().nullable(),
+  Country: z.string().nullable(),
+  PostalCode: z.string().nullable(),
+  Phone: z.string().nullable(),
+  Fax: z.string().nullable(),
+  Email: z.string().nullable(),
+});
+
 export const employees_schema_optional = z.object({
   EmployeeId: z.number().optional(),
   LastName: z.string().optional(),
   FirstName: z.string().optional(),
-  Title: z.string().optional(),
-  ReportsTo: z.number().optional(),
-  BirthDate: z.string().optional(),
-  HireDate: z.string().optional(),
-  Address: z.string().optional(),
-  City: z.string().optional(),
-  State: z.string().optional(),
-  Country: z.string().optional(),
-  PostalCode: z.string().optional(),
-  Phone: z.string().optional(),
-  Fax: z.string().optional(),
-  Email: z.string().optional(),
+  Title: z.string().optional().nullable(),
+  ReportsTo: z.number().optional().nullable(),
+  BirthDate: z.string().optional().nullable(),
+  HireDate: z.string().optional().nullable(),
+  Address: z.string().optional().nullable(),
+  City: z.string().optional().nullable(),
+  State: z.string().optional().nullable(),
+  Country: z.string().optional().nullable(),
+  PostalCode: z.string().optional().nullable(),
+  Phone: z.string().optional().nullable(),
+  Fax: z.string().optional().nullable(),
+  Email: z.string().optional().nullable(),
 });
 
 export const genres_primary_key = z.number();
+export const genres_schema = z.object({
+  GenreId: z.number(),
+  Name: z.string().nullable(),
+});
+
 export const genres_schema_optional = z.object({
   GenreId: z.number().optional(),
-  Name: z.string().optional(),
+  Name: z.string().optional().nullable(),
 });
 
 export const invoices_primary_key = z.number();
+export const invoices_schema = z.object({
+  InvoiceId: z.number(),
+  CustomerId: z.number(),
+  InvoiceDate: z.string(),
+  BillingAddress: z.string().nullable(),
+  BillingCity: z.string().nullable(),
+  BillingState: z.string().nullable(),
+  BillingCountry: z.string().nullable(),
+  BillingPostalCode: z.string().nullable(),
+  Total: z.string(),
+});
+
 export const invoices_schema_optional = z.object({
   InvoiceId: z.number().optional(),
   CustomerId: z.number().optional(),
   InvoiceDate: z.string().optional(),
-  BillingAddress: z.string().optional(),
-  BillingCity: z.string().optional(),
-  BillingState: z.string().optional(),
-  BillingCountry: z.string().optional(),
-  BillingPostalCode: z.string().optional(),
+  BillingAddress: z.string().optional().nullable(),
+  BillingCity: z.string().optional().nullable(),
+  BillingState: z.string().optional().nullable(),
+  BillingCountry: z.string().optional().nullable(),
+  BillingPostalCode: z.string().optional().nullable(),
   Total: z.string().optional(),
 });
 
 export const invoice_items_primary_key = z.number();
+export const invoice_items_schema = z.object({
+  InvoiceLineId: z.number(),
+  InvoiceId: z.number(),
+  TrackId: z.number(),
+  UnitPrice: z.string(),
+  Quantity: z.number(),
+});
+
 export const invoice_items_schema_optional = z.object({
   InvoiceLineId: z.number().optional(),
   InvoiceId: z.number().optional(),
@@ -85,33 +155,60 @@ export const invoice_items_schema_optional = z.object({
 });
 
 export const media_types_primary_key = z.number();
+export const media_types_schema = z.object({
+  MediaTypeId: z.number(),
+  Name: z.string().nullable(),
+});
+
 export const media_types_schema_optional = z.object({
   MediaTypeId: z.number().optional(),
-  Name: z.string().optional(),
+  Name: z.string().optional().nullable(),
 });
 
 export const playlists_primary_key = z.number();
+export const playlists_schema = z.object({
+  PlaylistId: z.number(),
+  Name: z.string().nullable(),
+});
+
 export const playlists_schema_optional = z.object({
   PlaylistId: z.number().optional(),
-  Name: z.string().optional(),
+  Name: z.string().optional().nullable(),
 });
 
 export const playlist_track_primary_key = z.number();
+export const playlist_track_schema = z.object({
+  PlaylistId: z.number(),
+  TrackId: z.number(),
+});
+
 export const playlist_track_schema_optional = z.object({
   PlaylistId: z.number().optional(),
   TrackId: z.number().optional(),
 });
 
 export const tracks_primary_key = z.number();
+export const tracks_schema = z.object({
+  TrackId: z.number(),
+  Name: z.string(),
+  AlbumId: z.number().nullable(),
+  MediaTypeId: z.number(),
+  GenreId: z.number().nullable(),
+  Composer: z.string().nullable(),
+  Milliseconds: z.number(),
+  Bytes: z.number().nullable(),
+  UnitPrice: z.string(),
+});
+
 export const tracks_schema_optional = z.object({
   TrackId: z.number().optional(),
   Name: z.string().optional(),
-  AlbumId: z.number().optional(),
+  AlbumId: z.number().optional().nullable(),
   MediaTypeId: z.number().optional(),
-  GenreId: z.number().optional(),
-  Composer: z.string().optional(),
+  GenreId: z.number().optional().nullable(),
+  Composer: z.string().optional().nullable(),
   Milliseconds: z.number().optional(),
-  Bytes: z.number().optional(),
+  Bytes: z.number().optional().nullable(),
   UnitPrice: z.string().optional(),
 });
 
