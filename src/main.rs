@@ -331,18 +331,13 @@ mod responses {
     #[derive(Debug, Serialize)]
     #[serde(tag = "type")]
     pub enum ErrorResponse {
-        BadRequest(ErrorMessage),
+        BadRequest { message: BoxStr },
         NonTextMessage,
-    }
-
-    #[derive(Debug, Serialize)]
-    pub struct ErrorMessage {
-        message: BoxStr,
     }
 
     impl ErrorResponse {
         pub const fn bad_request(message: BoxStr) -> Self {
-            Self::BadRequest(ErrorMessage { message })
+            Self::BadRequest { message }
         }
     }
 }
@@ -1745,7 +1740,7 @@ export const {table}_update_row_response = z.object({{
     writeln!(
         schema,
         r#"
-export const ErrorMessage = z.object({{
+export const BadRequest = z.object({{
   message: z.string(),
 }});
 
@@ -1762,14 +1757,11 @@ export const SortColumnNotFound = z.object({{
 }});
 
 export const ErrorResponse = z.discriminatedUnion("type", [
-  z.object({{ type: z.literal("BadRequest"), ...ErrorMessage.shape }}),
+  z.object({{ type: z.literal("BadRequest"), ...BadRequest.shape }}),
   z.object({{ type: z.literal("NonTextMessage") }}),
   z.object({{ type: z.literal("TableNotFound"), ...TableNotFound.shape }}),
   z.object({{ type: z.literal("ColumnsNotFound"), ...ColumnsNotFound.shape }}),
-  z.object({{
-    type: z.literal("SortColumnNotFound"),
-    ...SortColumnNotFound.shape,
-  }}),
+  z.object({{ type: z.literal("SortColumnNotFound"), ...SortColumnNotFound.shape }}),
   z.object({{ type: z.literal("PageNumberCanNotBeZero") }}),
   z.object({{ type: z.literal("RowNotFound") }}),
   z.object({{ type: z.literal("DatabaseError") }}),

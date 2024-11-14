@@ -1508,7 +1508,7 @@ export const ApiResponse = z.union([
   UpdateRowResponse,
 ]);
 
-export const ErrorMessage = z.object({
+export const BadRequest = z.object({
   message: z.string(),
 });
 
@@ -1525,7 +1525,7 @@ export const SortColumnNotFound = z.object({
 });
 
 export const ErrorResponse = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("BadRequest"), ...ErrorMessage.shape }),
+  z.object({ type: z.literal("BadRequest"), ...BadRequest.shape }),
   z.object({ type: z.literal("NonTextMessage") }),
   z.object({ type: z.literal("TableNotFound"), ...TableNotFound.shape }),
   z.object({ type: z.literal("ColumnsNotFound"), ...ColumnsNotFound.shape }),
